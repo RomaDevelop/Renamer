@@ -104,7 +104,7 @@ void MainWidget::SlotReplace()
 	if(from.isEmpty()) { QMbError("Empty from value"); return; }
 
 	QRegularExpression fromRe(from);
-	bool useFromRe = checkBoxRegExprInFrom->isChecked();
+	bool regExprFrom = checkBoxRegExprInFrom->isChecked();
 
 	QStringList errors;
 	QStringList logs;
@@ -129,7 +129,7 @@ void MainWidget::SlotReplace()
 		int index = -1;
 		int length = -1;
 
-		if(not useFromRe)
+		if(not regExprFrom)
 		{
 			index = fi.fileName().indexOf(from);
 			length = from.length();
@@ -145,10 +145,10 @@ void MainWidget::SlotReplace()
 
 		if(index != -1)
 		{
-			if(length <= 0)
+			if((not regExprFrom and length <= 0) or (regExprFrom and length < 0))
 			{
-				errors += "replace length <= 0 in "+row;
-				logs += "error, replace length <= 0 in "+row;
+				errors += "replace length = "+QSn(length)+" in "+row;
+				logs += "error, replace length = "+QSn(length)+" in "+row;
 				continue;
 			}
 
