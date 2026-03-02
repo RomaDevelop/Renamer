@@ -1,4 +1,4 @@
-#include "MainWidget.h"
+﻿#include "MainWidget.h"
 
 #include <set>
 
@@ -12,10 +12,12 @@
 #include <QFile>
 #include <QLabel>
 #include <QSplitter>
+#include <QSettings>
 
 #include "MyQShortings.h"
 #include "MyQFileDir.h"
 #include "MyQDialogs.h"
+#include "MyQTextEdit.h"
 
 MainWidget::MainWidget(QWidget *parent)
 	: QWidget(parent)
@@ -27,14 +29,12 @@ MainWidget::MainWidget(QWidget *parent)
 	checkBoxIncludeSubcats->setChecked(true);
 
 	auto vloMain = new QVBoxLayout(this);
-	auto l1_splitter = new QSplitter(Qt::Horizontal);
-	auto hlo2 = new QHBoxLayout;
+	splitter = new QSplitter(Qt::Horizontal);
 
-	vloMain->addWidget(l1_splitter);
-	vloMain->addLayout(hlo2);
+	vloMain->addWidget(splitter);
 
 	auto w_in_l1 = new QWidget;
-	l1_splitter->addWidget(w_in_l1);
+	splitter->addWidget(w_in_l1);
 	auto vloLeft = new QVBoxLayout(w_in_l1);
 	vloLeft->setContentsMargins(0,0,0,0);
 
@@ -50,22 +50,68 @@ MainWidget::MainWidget(QWidget *parent)
 	vloLeft->addWidget(leTo);
 	vloLeft->addStretch();
 
-	l1_splitter->addWidget(textEditFindRes);
+	splitter->addWidget(textEditFindRes);
 
-	auto btnScan = new QPushButton("Scan");
-	connect(btnScan, &QAbstractButton::clicked, this, &MainWidget::SlotScan);
+	CreateBottomRow(vloMain);
 
-	auto btnReplace = new QPushButton("Replace");
-	connect(btnReplace, &QAbstractButton::clicked, this, &MainWidget::SlotReplace);
-
-	hlo2->addWidget(btnScan);
-	hlo2->addWidget(btnReplace);
-	hlo2->addStretch();
+	QTimer::singleShot(0, [this](){ LoadSettings(); });
 }
 
 MainWidget::~MainWidget()
 {
+	SaveSettings();
+}
 
+void MainWidget::CreateBottomRow(QVBoxLayout * vloMain)
+{
+	auto hlo2 = new QHBoxLayout;
+	vloMain->addLayout(hlo2);
+
+	auto btnScan = new QPushButton("Scan");
+	hlo2->addWidget(btnScan);
+	connect(btnScan, &QAbstractButton::clicked, this, &MainWidget::SlotScan);
+
+	auto btnReplace = new QPushButton("Replace");
+	hlo2->addWidget(btnReplace);
+	connect(btnReplace, &QAbstractButton::clicked, this, &MainWidget::SlotReplace);
+
+	auto btnNotes = new QPushButton("Notes");
+	hlo2->addWidget(btnNotes);
+	connect(btnNotes, &QAbstractButton::clicked, this, [this](){
+		auto res = MyQDialogs::InputText("Notes", notesContent);
+		if(res.acceptedAndChanged) notesContent = res.text;
+	});
+
+	hlo2->addStretch();
+}
+
+void MainWidget::SaveSettings()
+{
+	QSettings qsettings(settingsFile, QSettings::IniFormat);
+	auto settings = GetSettings();
+	for(auto &setting:settings)
+	{
+		qsettings.setValue(setting.name, setting.VarToStr());
+	}
+}
+
+void MainWidget::LoadSettings()
+{
+	QSettings qsettings(settingsFile, QSettings::IniFormat);
+	auto settings = GetSettings();
+	for(auto &setting:settings)
+	{
+		setting.VarFromStr(qsettings.value(setting.name).toString());
+	}
+}
+
+std::vector<setting> MainWidget::GetSettings()
+{
+	std::vector<setting> settings;
+	settings.emplace_back(setting{"notesContent", &notesContent});
+	settings.emplace_back(setting{"geometry", QWidgetGeometry(this)});
+	settings.emplace_back(setting{"splitterState", QSplitterState(splitter)});
+	return settings;
 }
 
 void MainWidget::SlotScan()
@@ -76,6 +122,11 @@ void MainWidget::SlotScan()
 
 	if(rows.isEmpty()) { QMbError("Empty dirs"); return; }
 
+	auto settings = ReplaceSettingsGet();
+
+	std::vector<std::pair<int, int>> fromToForColorize;
+
+	bool showInfoForAdd = false;
 	QStringList errors;
 	for(auto &row:rows)
 	{
@@ -86,25 +137,44 @@ void MainWidget::SlotScan()
 		QDirIterator dirIt(row, QDir::Files | QDir::NoDotAndDotDot, flags);
 		while(dirIt.hasNext())
 		{
-			textEditFindRes->append(dirIt.next());
+			QString row = dirIt.next();
+			int countBeforeAdd = textEditFindRes->document()->characterCount();
+			if(countBeforeAdd == 1) countBeforeAdd = 0; // пустой документ выдаёт 1
+			textEditFindRes->append(row);
+
+			if(not settings.from.isEmpty())
+			{
+				auto replace = PrepareReplaceForRow(row, settings);
+				if(replace.foundIndex >= 0)
+				{
+					int index = countBeforeAdd + replace.foundIndexInNameWithPath;
+					int add = replace.lengthToReplace == 0 ? 1 : 0;
+					if(add != 0) showInfoForAdd = true;
+					fromToForColorize.emplace_back(std::pair{index, index+replace.lengthToReplace+add});
+				}
+			}
 		}
 	}
+
+	MyQTextEdit::ColorizeBackground(textEditFindRes, fromToForColorize, Qt::yellow);
 
 	if(not errors.isEmpty())
 	{
 		MyQDialogs::ShowText("Errors while scan:\n"+errors.join('\n'));
 	}
+
+	if(showInfoForAdd)
+	{
+		QMbInfo("Длина заменяемого текста равна нулю. "
+				"В строках выделена буква, перед котрой будет вставлен текст, сама буква заменена не будет!");
+	}
 }
 
 void MainWidget::SlotReplace()
 {
-	auto from = leFrom->text();
-	auto to = leTo->text();
+	ReplaceSettings regStgs = ReplaceSettingsGet();
 
-	if(from.isEmpty()) { QMbError("Empty from value"); return; }
-
-	QRegularExpression fromRe(from);
-	bool regExprFrom = checkBoxRegExprInFrom->isChecked();
+	if(regStgs.from.isEmpty()) { QMbError("Empty from value"); return; }
 
 	QStringList errors;
 	QStringList logs;
@@ -113,50 +183,21 @@ void MainWidget::SlotReplace()
 
 	if(rows.isEmpty()) { QMbError("Empty find res"); return; }
 
-	struct Replace { QString from; QString to; };
-
 	std::vector<Replace> replaces;
 	for(auto &row:rows)
 	{
-		QFileInfo fi(row);
-		if(not fi.isFile())
+		Replace replace = PrepareReplaceForRow(row, regStgs);
+		if(replace.error.isEmpty())
 		{
-			errors += "is not file: " + row;
-			logs += "error, is not file: "+row;
-			continue;
-		}
-
-		int index = -1;
-		int length = -1;
-
-		if(not regExprFrom)
-		{
-			index = fi.fileName().indexOf(from);
-			length = from.length();
+			if(replace.foundIndex >= 0)
+				replaces.emplace_back(std::move(replace));
+			else logs += "doesn't contains from value, will not be renamed: " + row;
 		}
 		else
 		{
-			QRegularExpressionMatch match = fromRe.match(fi.fileName());
-			if (match.hasMatch()) {
-				index = match.capturedStart(0);
-				length = match.capturedLength(0);
-			}
+			errors += replace.error + " in " + row;
+			logs += "error, " + replace.error + " in " + row;
 		}
-
-		if(index != -1)
-		{
-			if((not regExprFrom and length <= 0) or (regExprFrom and length < 0))
-			{
-				errors += "replace length = "+QSn(length)+" in "+row;
-				logs += "error, replace length = "+QSn(length)+" in "+row;
-				continue;
-			}
-
-			auto &rep = replaces.emplace_back();
-			rep.from = fi.filePath();
-			rep.to = fi.path() + "/" + fi.fileName().replace(index, length, to);
-		}
-		else logs += "doesn't contains from value, will not be renamed: " + row;
 	}
 
 	if(not errors.isEmpty())
@@ -196,6 +237,50 @@ void MainWidget::SlotReplace()
 	}
 }
 
+Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings)
+{
+	Replace replace;
+	QFileInfo fi(row);
+	QString fileNameNoPath = fi.fileName();
+	QString path = fi.path();
+	if(not fi.isFile())
+	{
+		replace.error = "is not file";
+		return replace;
+	}
+
+	if(not replaceSettings.fromRegExprEnabled)
+	{
+		replace.foundIndex = fileNameNoPath.indexOf(replaceSettings.from);
+		replace.foundIndexInNameWithPath = path.size() + 1 + replace.foundIndex;
+		replace.lengthToReplace = replaceSettings.from.length();
+	}
+	else
+	{
+		QRegularExpressionMatch match = replaceSettings.fromRegExpr.match(fileNameNoPath);
+		if (match.hasMatch()) {
+			replace.foundIndex = match.capturedStart(0);
+			replace.foundIndexInNameWithPath = path.size() + 1 + replace.foundIndex;
+			replace.lengthToReplace = match.capturedLength(0);
+		}
+	}
+
+	if(replace.foundIndex != -1)
+	{
+		if((not replaceSettings.fromRegExprEnabled and replace.lengthToReplace <= 0)
+				or (replaceSettings.fromRegExprEnabled and replace.lengthToReplace < 0))
+		{
+			replace.error = "replace length = "+QSn(replace.lengthToReplace);
+			return replace;
+		}
+
+		replace.from = fi.filePath();
+		replace.to = fi.path() + "/" + fileNameNoPath.replace(replace.foundIndex, replace.lengthToReplace, replaceSettings.to);
+	}
+
+	return replace;
+}
+
 QStringList MainWidget::GetRows(QTextEdit * textEdit)
 {
 	auto text = textEdit->toPlainText();
@@ -212,4 +297,33 @@ QStringList MainWidget::GetRows(QTextEdit * textEdit)
 	rows.erase(removeRes, rows.end());
 
 	return rows;
+}
+
+QByteArray ByteArrFromStr(const QString &str) { return QByteArray::fromBase64(str.toLatin1()); }
+QString ByteArrToStr(const QByteArray &byteArr) {  return QString::fromLatin1(byteArr.toBase64()); }
+
+void setting::VarFromStr(const QString &str)
+{
+	struct var_from_str {
+		var_from_str(const QString &str): str{str} {}
+		void operator()(QString *strPtr) { *strPtr = str; }
+		void operator()(QByteArray *byteArr) { *byteArr = ByteArrFromStr(str); }
+		void operator()(QWidgetGeometry wGeo) { wGeo.widget->restoreGeometry(ByteArrFromStr(str)); }
+		void operator()(QSplitterState splState) { splState.splitter->restoreState(ByteArrFromStr(str)); }
+		QString str;
+	};
+
+	std::visit(var_from_str{str}, var);
+}
+
+QString setting::VarToStr()
+{
+	struct var_to_str {
+		QString operator()(QString *strPtr) const { return *strPtr; }
+		QString operator()(QByteArray *byteArr) { return ByteArrToStr(*byteArr); }
+		QString operator()(QWidgetGeometry wGeo) { return ByteArrToStr(wGeo.widget->saveGeometry()); }
+		QString operator()(QSplitterState splState) { return ByteArrToStr(splState.splitter->saveState()); }
+	};
+
+	return std::visit(var_to_str{}, var);
 }
