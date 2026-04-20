@@ -19,6 +19,7 @@
 #include <QSplitter>
 
 #include "MyQDifferent.h"
+#include "thread_box.h"
 
 struct QWidgetGeometry
 {
@@ -105,6 +106,7 @@ private:
 
 	QTextEdit *textEditFindRes = new QTextEdit;
 	bool replaceAllEntries = false;
+	thread_box renameThread {"renameThread"};
 
 	void SlotScan();
 	void SlotReplace();

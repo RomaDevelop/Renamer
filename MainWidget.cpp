@@ -11,8 +11,10 @@
 #include <QDebug>
 #include <QMessageBox>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QLabel>
+#include <QProgressDialog>
 #include <QSplitter>
 #include <QSettings>
 
@@ -259,6 +261,8 @@ void MainWidget::SlotReplace()
 
 	if(not DialogConfirmReplace::Confirm(replaces, this)) return;
 
+	std::vector<Replace> enabledReplaces;
+	enabledReplaces.reserve(replaces.size());
 	for(auto &rep:replaces)
 	{
 		if(not rep.enabled)
@@ -266,17 +270,76 @@ void MainWidget::SlotReplace()
 			logs += "skipped by user: " + rep.from + " -> " + rep.to;
 			continue;
 		}
-
-		auto renameRes = QFile::rename(rep.from, rep.to);
-		if(renameRes)
-		{
-			logs += "success, was renamed: " + rep.from + " -> " + rep.to;
-		}
-		else
-		{
-			errors += "error, was not renamed: " + rep.from + " -> " + rep.to;
-		}
 	}
+	for(auto &rep:replaces)
+		if(rep.enabled)
+			enabledReplaces.emplace_back(rep);
+
+	if(enabledReplaces.empty()) { QMbInfo("Nothing selected to replace"); return; }
+
+	QProgressDialog progressDialog("Renaming files...", QString(), 0, 100, this);
+	progressDialog.setWindowModality(Qt::ApplicationModal);
+	progressDialog.setMinimumDuration(0);
+	progressDialog.setAutoClose(false);
+	progressDialog.setAutoReset(false);
+	progressDialog.setCancelButton(nullptr);
+	progressDialog.setValue(0);
+	progressDialog.show();
+
+	QEventLoop waitLoop;
+	QStringList workerErrors;
+	QStringList workerLogs;
+	QString threadStartError;
+
+	renameThread.stopper = false;
+	bool started = renameThread.start([this, enabledReplaces, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
+		int done = 0;
+		int lastSentPercent = -1;
+		const int total = enabledReplaces.size();
+
+		for(auto &rep : enabledReplaces)
+		{
+			auto renameRes = QFile::rename(rep.from, rep.to);
+			if(renameRes)
+				workerLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
+			else
+				workerErrors += "error, was not renamed: " + rep.from + " -> " + rep.to;
+
+			done++;
+			int percent = done * 100 / total;
+			if(percent != lastSentPercent)
+			{
+				lastSentPercent = percent;
+				QMetaObject::invokeMethod(&progressDialog, [&progressDialog, percent](){
+					progressDialog.setValue(percent);
+				}, Qt::QueuedConnection);
+			}
+		}
+
+		QMetaObject::invokeMethod(this, [&waitLoop](){
+			waitLoop.quit();
+		}, Qt::QueuedConnection);
+	});
+	if(not started)
+	{
+		threadStartError = "Rename thread already works";
+	}
+	else
+	{
+		waitLoop.exec();
+		renameThread.finish(10);
+	}
+
+	progressDialog.setValue(100);
+
+	if(not threadStartError.isEmpty())
+	{
+		QMbError(threadStartError);
+		return;
+	}
+
+	errors += workerErrors;
+	logs += workerLogs;
 
 	auto answ = QMessageBox::question({}, "Rename finished", "Show log?");
 	if(answ == QMessageBox::Yes)
