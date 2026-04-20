@@ -17,10 +17,13 @@
 #include <QProgressDialog>
 #include <QSplitter>
 #include <QSettings>
+#include <QDateTime>
+#include <QDir>
 
 #include "MyQShortings.h"
 #include "MyQFileDir.h"
 #include "MyQDialogs.h"
+#include "MyQExecute.h"
 #include "MyQTextEdit.h"
 
 MainWidget::MainWidget(QWidget *parent)
@@ -93,6 +96,10 @@ void MainWidget::CreateBottomRow(QVBoxLayout * vloMain)
 		auto res = MyQDialogs::InputText("Notes", notesContent);
 		if(res.acceptedAndChanged) notesContent = res.text;
 	});
+
+	auto btnLogs = new QPushButton("Logs");
+	hlo2->addWidget(btnLogs);
+	connect(btnLogs, &QAbstractButton::clicked, this, &MainWidget::OpenLogsDir);
 
 	hlo2->addStretch();
 }
@@ -299,11 +306,15 @@ void MainWidget::SlotReplace()
 
 		for(auto &rep : enabledReplaces)
 		{
-			auto renameRes = QFile::rename(rep.from, rep.to);
-			if(renameRes)
+			auto renameError = MyQFileDir::Rename(rep.from, rep.to, true);
+			if(renameError.isEmpty())
 				workerLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
 			else
-				workerErrors += "error, was not renamed: " + rep.from + " -> " + rep.to;
+			{
+				QString errorText = "error, was not renamed: " + rep.from + " -> " + rep.to + "\n" + renameError;
+				workerErrors += errorText;
+				workerLogs += errorText;
+			}
 
 			done++;
 			int percent = done * 100 / total;
@@ -341,10 +352,77 @@ void MainWidget::SlotReplace()
 	errors += workerErrors;
 	logs += workerLogs;
 
-	auto answ = QMessageBox::question({}, "Rename finished", "Show log?");
-	if(answ == QMessageBox::Yes)
+	QString logFile = SaveLogs(logs, errors);
+	if(logFile.isEmpty())
+		errors += "error saving log file";
+
+	if(not errors.isEmpty())
 	{
-		MyQDialogs::ShowText(logs);
+		auto answ = QMessageBox::question({}, "Rename finished", "Show errors log?");
+		if(answ == QMessageBox::Yes)
+		{
+			QStringList textToShow;
+			if(not logFile.isEmpty())
+				textToShow.prepend("Log file: " + logFile);
+			textToShow += BuildLogsText(logs, errors);
+			MyQDialogs::ShowText(textToShow.join("\n\n"));
+		}
+	}
+}
+
+QString MainWidget::BuildLogsText(const QStringList &logs, const QStringList &errors) const
+{
+	QStringList lines;
+	lines += "DateTime: " + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz");
+	lines += "Logs:";
+	if(logs.isEmpty()) lines += "<empty>";
+	else lines += logs;
+	lines += "";
+	lines += "Errors:";
+	if(errors.isEmpty()) lines += "<empty>";
+	else lines += errors;
+	return lines.join('\n');
+}
+
+QString MainWidget::LogsDirPath() const
+{
+	return MyQDifferent::PathToExe() + "/files/logs";
+}
+
+QString MainWidget::SaveLogs(const QStringList &logs, const QStringList &errors) const
+{
+	QString logsDir = LogsDirPath();
+	if(not QDir().mkpath(logsDir))
+	{
+		qCritical() << "can't create logs dir" << logsDir;
+		return "";
+	}
+
+	auto removeOldFilesError = MyQFileDir::RemoveOldFiles(logsDir, 29);
+	if(not removeOldFilesError.isEmpty())
+	{
+		qCritical() << "RemoveOldFiles error:" << removeOldFilesError;
+	}
+
+	QString logFile = logsDir + "/" + QDateTime::currentDateTime().toString("yyyy.MM.dd_hh-mm-ss.zzz") + ".txt";
+	if(not MyQFileDir::WriteFile(logFile, BuildLogsText(logs, errors)))
+		return "";
+
+	return logFile;
+}
+
+void MainWidget::OpenLogsDir()
+{
+	QString logsDir = LogsDirPath();
+	if(not QDir().mkpath(logsDir))
+	{
+		QMbError("Can't create logs dir:\n" + logsDir);
+		return;
+	}
+
+	if(not MyQExecute::OpenDir(logsDir))
+	{
+		QMbError("Can't open logs dir:\n" + logsDir);
 	}
 }
 

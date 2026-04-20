@@ -17,6 +17,7 @@
 #include <QVBoxLayout>
 #include <QSettings>
 #include <QSplitter>
+#include <QStringList>
 
 #include "MyQDifferent.h"
 #include "thread_box.h"
@@ -86,6 +87,10 @@ private:
 	void UpdateFindResHighlight();
 	void ClearFindResHighlight();
 	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
+	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
+	QString LogsDirPath() const;
+	QString SaveLogs(const QStringList &logs, const QStringList &errors) const;
+	void OpenLogsDir();
 
 	void SaveSettings();
 	void LoadSettings();
