@@ -5,6 +5,7 @@
 #include <memory>
 #include <thread>
 #include <variant>
+#include <vector>
 
 #include <QRegularExpression>
 #include <QMainWindow>
@@ -65,6 +66,8 @@ struct Replace
 	QString from;
 	QString to;
 	std::vector<ReplaceMatch> matches;
+	std::vector<ReplaceMatch> matchesInResult;
+	bool enabled = true;
 
 	bool HasMatches() const { return not matches.empty(); }
 };

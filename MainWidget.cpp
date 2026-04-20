@@ -1,5 +1,7 @@
 ﻿#include "MainWidget.h"
 
+#include "DialogConfirmReplace.h"
+
 #include <set>
 
 #include <QVBoxLayout>
@@ -255,17 +257,16 @@ void MainWidget::SlotReplace()
 
 	if(replaces.empty()) { QMbInfo("Nothing to replace"); return; }
 
-	QStringList text {"Replaces will be (you can confirm or abort on next step):"};
-	for(auto &rep:replaces)
-	{
-		text += rep.from + " -> " + rep.to;
-	}
-	MyQDialogs::ShowText(text);
-	auto answ = QMessageBox::question({}, "Confirm replace", "Confirm replace?");
-	if(answ == QMessageBox::No) return;
+	if(not DialogConfirmReplace::Confirm(replaces, this)) return;
 
 	for(auto &rep:replaces)
 	{
+		if(not rep.enabled)
+		{
+			logs += "skipped by user: " + rep.from + " -> " + rep.to;
+			continue;
+		}
+
 		auto renameRes = QFile::rename(rep.from, rep.to);
 		if(renameRes)
 		{
@@ -277,7 +278,7 @@ void MainWidget::SlotReplace()
 		}
 	}
 
-	answ = QMessageBox::question({}, "Rename finished", "Show log?");
+	auto answ = QMessageBox::question({}, "Rename finished", "Show log?");
 	if(answ == QMessageBox::Yes)
 	{
 		MyQDialogs::ShowText(logs);
@@ -355,9 +356,17 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 
 		replace.from = fi.filePath();
 		QString newFileName = fileNameNoPath;
-		for(auto it = replace.matches.rbegin(); it != replace.matches.rend(); ++it)
+		int lenDiff = 0;
+		for(const auto &match : replace.matches)
 		{
-			newFileName.replace(it->foundIndex, it->lengthToReplace, replaceSettings.to);
+			int foundIndexInResult = match.foundIndex + lenDiff;
+			replace.matchesInResult.emplace_back(ReplaceMatch{
+				foundIndexInResult,
+				path.size() + 1 + foundIndexInResult,
+				replaceSettings.to.size()
+			});
+			newFileName.replace(foundIndexInResult, match.lengthToReplace, replaceSettings.to);
+			lenDiff += replaceSettings.to.size() - match.lengthToReplace;
 		}
 		replace.to = fi.path() + "/" + newFileName;
 	}
