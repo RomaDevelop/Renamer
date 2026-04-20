@@ -23,14 +23,18 @@ public:
 
 private:
 	void FillTable();
+	void UpdatePreviewTexts();
 	void UpdatePreviewFont();
 	void UpdateRunButtonState();
 	void SetAllRowsChecked(Qt::CheckState state);
 	void InvertRowsChecked();
 
 	std::vector<Replace> &replaces;
+	std::vector<QLabel*> currentValueLabels;
+	std::vector<QLabel*> newValueLabels;
 
 	QTableWidget *table;
+	QSlider *sliderTrimStartPercent;
 	QSlider *sliderFontSize;
 	QPushButton *btnRun;
 };

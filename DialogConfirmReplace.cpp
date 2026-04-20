@@ -20,7 +20,51 @@
 
 namespace
 {
-QString HighlightedText(QString text, const std::vector<ReplaceMatch> &matches)
+struct PreviewText
+{
+	QString text;
+	std::vector<ReplaceMatch> matches;
+};
+
+PreviewText TrimPreviewText(const QString &text, const std::vector<ReplaceMatch> &matches, int trimStartPercent)
+{
+	PreviewText result;
+	int trimCount = text.size() * trimStartPercent / 100;
+	result.text = text.mid(trimCount);
+
+	for(const auto &match : matches)
+	{
+		int matchStart = match.foundIndexInNameWithPath;
+		if(match.lengthToReplace == 0)
+		{
+			if(matchStart < trimCount) continue;
+
+			result.matches.emplace_back(ReplaceMatch{
+				matchStart - trimCount,
+				matchStart - trimCount,
+				0
+			});
+			continue;
+		}
+
+		int matchEnd = matchStart + match.lengthToReplace;
+		if(matchEnd <= trimCount) continue;
+
+		int visibleStart = std::max(matchStart, trimCount);
+		int visibleEnd = std::min(matchEnd, text.size());
+		if(visibleEnd <= visibleStart) continue;
+
+		result.matches.emplace_back(ReplaceMatch{
+			visibleStart - trimCount,
+			visibleStart - trimCount,
+			visibleEnd - visibleStart
+		});
+	}
+
+	return result;
+}
+
+QString HighlightedText(const QString &text, const std::vector<ReplaceMatch> &matches)
 {
 	auto toHtmlEscaped = [](const QString &value){ return value.toHtmlEscaped().replace('\n', "<br>"); };
 
@@ -28,9 +72,9 @@ QString HighlightedText(QString text, const std::vector<ReplaceMatch> &matches)
 	int currentIndex = 0;
 	for(const auto &match : matches)
 	{
-		if(match.foundIndexInNameWithPath < currentIndex) continue;
+		if(match.foundIndex < currentIndex) continue;
 
-		int safeStart = std::clamp(match.foundIndexInNameWithPath, 0, text.size());
+		int safeStart = std::clamp(match.foundIndex, 0, text.size());
 		int safeLength = std::clamp(match.lengthToReplace, 0, text.size() - safeStart);
 
 		html += toHtmlEscaped(text.mid(currentIndex, safeStart - currentIndex));
@@ -49,14 +93,13 @@ QString HighlightedText(QString text, const std::vector<ReplaceMatch> &matches)
 	return html;
 }
 
-QLabel *CreatePreviewLabel(const QString &text, const std::vector<ReplaceMatch> &matches)
+QLabel *CreatePreviewLabel()
 {
 	auto label = new QLabel;
 	label->setTextFormat(Qt::RichText);
 	label->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	label->setWordWrap(false);
 	label->setMargin(4);
-	label->setText(HighlightedText(text, matches));
 	return label;
 }
 }
@@ -84,6 +127,15 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QW
 	auto btnInvertSelection = new QPushButton("Инвертировать");
 	hloTop->addWidget(btnInvertSelection);
 	connect(btnInvertSelection, &QPushButton::clicked, this, &DialogConfirmReplace::InvertRowsChecked);
+
+	hloTop->addSpacing(16);
+	hloTop->addWidget(new QLabel("Скрыть начало:"));
+	sliderTrimStartPercent = new QSlider(Qt::Horizontal);
+	sliderTrimStartPercent->setRange(0, 100);
+	sliderTrimStartPercent->setValue(0);
+	sliderTrimStartPercent->setFixedWidth(170);
+	hloTop->addWidget(sliderTrimStartPercent);
+	connect(sliderTrimStartPercent, &QSlider::valueChanged, this, [this](){ UpdatePreviewTexts(); });
 
 	hloTop->addStretch();
 
@@ -130,6 +182,7 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QW
 	connect(btnCancel, &QPushButton::clicked, this, &DialogConfirmReplace::reject);
 
 	FillTable();
+	UpdatePreviewTexts();
 	UpdatePreviewFont();
 	UpdateRunButtonState();
 }
@@ -143,6 +196,8 @@ bool DialogConfirmReplace::Confirm(std::vector<Replace> &replaces, QWidget *pare
 void DialogConfirmReplace::FillTable()
 {
 	table->setRowCount(static_cast<int>(replaces.size()));
+	currentValueLabels.resize(replaces.size());
+	newValueLabels.resize(replaces.size());
 
 	for(int row = 0; row < table->rowCount(); row++)
 	{
@@ -153,14 +208,30 @@ void DialogConfirmReplace::FillTable()
 		itemEnabled->setCheckState(replace.enabled ? Qt::Checked : Qt::Unchecked);
 		table->setItem(row, 0, itemEnabled);
 
-		table->setCellWidget(row, 1, CreatePreviewLabel(replace.from, replace.matches));
-		table->setCellWidget(row, 2, CreatePreviewLabel(replace.to, replace.matchesInResult));
+		currentValueLabels[row] = CreatePreviewLabel();
+		newValueLabels[row] = CreatePreviewLabel();
+		table->setCellWidget(row, 1, currentValueLabels[row]);
+		table->setCellWidget(row, 2, newValueLabels[row]);
 	}
 
 	connect(table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item){
 		if(item and item->column() == 0)
 			UpdateRunButtonState();
 	});
+}
+
+void DialogConfirmReplace::UpdatePreviewTexts()
+{
+	int trimStartPercent = sliderTrimStartPercent->value();
+	for(int row = 0; row < table->rowCount(); row++)
+	{
+		const auto &replace = replaces[row];
+		auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercent);
+		auto newPreview = TrimPreviewText(replace.to, replace.matchesInResult, trimStartPercent);
+
+		currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
+		newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));
+	}
 }
 
 void DialogConfirmReplace::UpdatePreviewFont()
