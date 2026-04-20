@@ -1,6 +1,7 @@
 #ifndef DIALOGCONFIRMREPLACE_H
 #define DIALOGCONFIRMREPLACE_H
 
+#include <set>
 #include <vector>
 
 #include <QDialog>
@@ -11,6 +12,7 @@ class QLabel;
 class QPushButton;
 class QSlider;
 class QTableWidget;
+class QTimer;
 
 class DialogConfirmReplace : public QDialog
 {
@@ -24,6 +26,9 @@ public:
 private:
 	void FillTable();
 	void UpdatePreviewTexts();
+	void RebuildPreviewUpdateQueues();
+	void ProcessPreviewUpdateChunk();
+	void UpdatePreviewRow(int row);
 	void UpdatePreviewFont();
 	void UpdateRunButtonState();
 	void SetAllRowsChecked(Qt::CheckState state);
@@ -32,11 +37,17 @@ private:
 	std::vector<Replace> &replaces;
 	std::vector<QLabel*> currentValueLabels;
 	std::vector<QLabel*> newValueLabels;
+	std::set<int> rowsInViewportCached;
+	std::vector<int> rowsPendingVisible;
+	std::vector<int> rowsPendingOther;
+	bool rowsInViewportProcessed = false;
+	int trimStartPercentPending = 0;
 
 	QTableWidget *table;
 	QSlider *sliderTrimStartPercent;
 	QSlider *sliderFontSize;
 	QPushButton *btnRun;
+	QTimer *timerPreviewUpdate;
 };
 
 #endif // DIALOGCONFIRMREPLACE_H

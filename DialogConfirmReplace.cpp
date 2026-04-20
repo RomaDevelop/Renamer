@@ -10,13 +10,16 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QScrollBar>
 #include <QSlider>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextDocument>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include "MyQShortings.h"
+#include "MyQTableWidget.h"
 
 namespace
 {
@@ -106,10 +109,12 @@ QLabel *CreatePreviewLabel()
 
 DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QWidget *parent)
 	: QDialog(parent),
-	  replaces(replacesRef)
+	  replaces(replacesRef),
+	  timerPreviewUpdate(new QTimer(this))
 {
 	setWindowTitle("Подтверждение замены");
 	resize(1200, 700);
+	timerPreviewUpdate->setInterval(15);
 
 	auto vloMain = new QVBoxLayout(this);
 
@@ -185,6 +190,12 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QW
 	UpdatePreviewTexts();
 	UpdatePreviewFont();
 	UpdateRunButtonState();
+
+	connect(timerPreviewUpdate, &QTimer::timeout, this, &DialogConfirmReplace::ProcessPreviewUpdateChunk);
+	connect(table->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](){
+		if(timerPreviewUpdate->isActive())
+			RebuildPreviewUpdateQueues();
+	});
 }
 
 bool DialogConfirmReplace::Confirm(std::vector<Replace> &replaces, QWidget *parent)
@@ -222,16 +233,68 @@ void DialogConfirmReplace::FillTable()
 
 void DialogConfirmReplace::UpdatePreviewTexts()
 {
-	int trimStartPercent = sliderTrimStartPercent->value();
+	trimStartPercentPending = sliderTrimStartPercent->value();
+	RebuildPreviewUpdateQueues();
+	if(not timerPreviewUpdate->isActive())
+		timerPreviewUpdate->start();
+}
+
+void DialogConfirmReplace::RebuildPreviewUpdateQueues()
+{
+	rowsInViewportCached = MyQTableWidget::RowsInViewPort(table);
+	rowsPendingVisible.assign(rowsInViewportCached.begin(), rowsInViewportCached.end());
+	rowsPendingOther.clear();
+	rowsPendingOther.reserve(table->rowCount());
+
 	for(int row = 0; row < table->rowCount(); row++)
 	{
-		const auto &replace = replaces[row];
-		auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercent);
-		auto newPreview = TrimPreviewText(replace.to, replace.matchesInResult, trimStartPercent);
-
-		currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
-		newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));
+		if(rowsInViewportCached.count(row) == 0)
+			rowsPendingOther.emplace_back(row);
 	}
+
+	rowsInViewportProcessed = rowsPendingVisible.empty();
+}
+
+void DialogConfirmReplace::ProcessPreviewUpdateChunk()
+{
+	const int rowsPerTick = 2;
+
+	for(int processed = 0; processed < rowsPerTick; processed++)
+	{
+		if(not rowsInViewportProcessed)
+		{
+			if(rowsPendingVisible.empty())
+			{
+				rowsInViewportProcessed = true;
+				continue;
+			}
+
+			UpdatePreviewRow(rowsPendingVisible.front());
+			rowsPendingVisible.erase(rowsPendingVisible.begin());
+			if(rowsPendingVisible.empty())
+				rowsInViewportProcessed = true;
+			continue;
+		}
+
+		if(rowsPendingOther.empty())
+		{
+			timerPreviewUpdate->stop();
+			return;
+		}
+
+		UpdatePreviewRow(rowsPendingOther.front());
+		rowsPendingOther.erase(rowsPendingOther.begin());
+	}
+}
+
+void DialogConfirmReplace::UpdatePreviewRow(int row)
+{
+	const auto &replace = replaces[row];
+	auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercentPending);
+	auto newPreview = TrimPreviewText(replace.to, replace.matchesInResult, trimStartPercentPending);
+
+	currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
+	newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));
 }
 
 void DialogConfirmReplace::UpdatePreviewFont()
