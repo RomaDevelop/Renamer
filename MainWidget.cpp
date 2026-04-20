@@ -44,6 +44,9 @@ MainWidget::MainWidget(QWidget *parent)
 	vloLeft->addWidget(leFilter);
 	vloLeft->addWidget(checkBoxIncludeSubcats);
 	vloLeft->addWidget(checkBoxRegExprInFrom);
+	radioReplaceFirst->setChecked(true);
+	vloLeft->addWidget(radioReplaceFirst);
+	vloLeft->addWidget(radioReplaceAll);
 	vloLeft->addWidget(new QLabel("Replace from:"));
 	vloLeft->addWidget(leFrom);
 	vloLeft->addWidget(new QLabel("Replace to:"));
@@ -53,6 +56,11 @@ MainWidget::MainWidget(QWidget *parent)
 	splitter->addWidget(textEditFindRes);
 
 	CreateBottomRow(vloMain);
+
+	connect(radioReplaceFirst, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
+	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
+	connect(checkBoxRegExprInFrom, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
+	connect(leFrom, &QLineEdit::textChanged, this, [this](){ UpdateFindResHighlight(); });
 
 	QTimer::singleShot(0, [this](){ LoadSettings(); });
 }
@@ -87,6 +95,7 @@ void MainWidget::CreateBottomRow(QVBoxLayout * vloMain)
 
 void MainWidget::SaveSettings()
 {
+	replaceAllEntries = radioReplaceAll->isChecked();
 	QSettings qsettings(settingsFile, QSettings::IniFormat);
 	auto settings = GetSettings();
 	for(auto &setting:settings)
@@ -103,15 +112,65 @@ void MainWidget::LoadSettings()
 	{
 		setting.VarFromStr(qsettings.value(setting.name).toString());
 	}
+	radioReplaceAll->setChecked(replaceAllEntries);
+	radioReplaceFirst->setChecked(not replaceAllEntries);
 }
 
 std::vector<setting> MainWidget::GetSettings()
 {
 	std::vector<setting> settings;
 	settings.emplace_back(setting{"notesContent", &notesContent});
+	settings.emplace_back(setting{"replaceAllEntries", &replaceAllEntries});
 	settings.emplace_back(setting{"geometry", QWidgetGeometry(this)});
 	settings.emplace_back(setting{"splitterState", QSplitterState(splitter)});
 	return settings;
+}
+
+void MainWidget::ClearFindResHighlight()
+{
+	QTextCursor cursor(textEditFindRes->document());
+	cursor.select(QTextCursor::Document);
+	QTextCharFormat format;
+	format.setBackground(Qt::transparent);
+	cursor.setCharFormat(format);
+}
+
+std::vector<std::pair<int, int>> MainWidget::GetHighlightRanges(const QStringList & rows, const ReplaceSettings & replaceSettings, bool * showInfoForAdd)
+{
+	if(showInfoForAdd) *showInfoForAdd = false;
+
+	std::vector<std::pair<int, int>> ranges;
+	if(replaceSettings.from.isEmpty() or not replaceSettings.error.isEmpty()) return ranges;
+
+	int rowStart = 0;
+	for(const auto &row: rows)
+	{
+		auto replace = PrepareReplaceForRow(row, replaceSettings);
+		if(replace.error.isEmpty())
+		{
+			for(const auto &match: replace.matches)
+			{
+				int add = match.lengthToReplace == 0 ? 1 : 0;
+				if(showInfoForAdd and add != 0) *showInfoForAdd = true;
+				ranges.emplace_back(rowStart + match.foundIndexInNameWithPath,
+									rowStart + match.foundIndexInNameWithPath + match.lengthToReplace + add);
+			}
+		}
+		rowStart += row.size() + 1;
+	}
+
+	return ranges;
+}
+
+void MainWidget::UpdateFindResHighlight()
+{
+	ClearFindResHighlight();
+
+	auto settings = ReplaceSettingsGet();
+	auto rows = GetRows(textEditFindRes);
+	auto ranges = GetHighlightRanges(rows, settings);
+	if(not ranges.empty())
+		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
 }
 
 void MainWidget::SlotScan()
@@ -123,8 +182,7 @@ void MainWidget::SlotScan()
 	if(rows.isEmpty()) { QMbError("Empty dirs"); return; }
 
 	auto settings = ReplaceSettingsGet();
-
-	std::vector<std::pair<int, int>> fromToForColorize;
+	if(not settings.error.isEmpty()) { QMbError(settings.error); return; }
 
 	bool showInfoForAdd = false;
 	QStringList errors;
@@ -138,25 +196,13 @@ void MainWidget::SlotScan()
 		while(dirIt.hasNext())
 		{
 			QString row = dirIt.next();
-			int countBeforeAdd = textEditFindRes->document()->characterCount();
-			if(countBeforeAdd == 1) countBeforeAdd = 0; // пустой документ выдаёт 1
 			textEditFindRes->append(row);
-
-			if(not settings.from.isEmpty())
-			{
-				auto replace = PrepareReplaceForRow(row, settings);
-				if(replace.foundIndex >= 0)
-				{
-					int index = countBeforeAdd + replace.foundIndexInNameWithPath;
-					int add = replace.lengthToReplace == 0 ? 1 : 0;
-					if(add != 0) showInfoForAdd = true;
-					fromToForColorize.emplace_back(std::pair{index, index+replace.lengthToReplace+add});
-				}
-			}
 		}
 	}
 
-	MyQTextEdit::ColorizeBackground(textEditFindRes, fromToForColorize, Qt::yellow);
+	auto ranges = GetHighlightRanges(GetRows(textEditFindRes), settings, &showInfoForAdd);
+	if(not ranges.empty())
+		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
 
 	if(not errors.isEmpty())
 	{
@@ -173,6 +219,7 @@ void MainWidget::SlotScan()
 void MainWidget::SlotReplace()
 {
 	ReplaceSettings regStgs = ReplaceSettingsGet();
+	if(not regStgs.error.isEmpty()) { QMbError(regStgs.error); return; }
 
 	if(regStgs.from.isEmpty()) { QMbError("Empty from value"); return; }
 
@@ -189,7 +236,7 @@ void MainWidget::SlotReplace()
 		Replace replace = PrepareReplaceForRow(row, regStgs);
 		if(replace.error.isEmpty())
 		{
-			if(replace.foundIndex >= 0)
+			if(replace.HasMatches())
 				replaces.emplace_back(std::move(replace));
 			else logs += "doesn't contains from value, will not be renamed: " + row;
 		}
@@ -251,31 +298,68 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 
 	if(not replaceSettings.fromRegExprEnabled)
 	{
-		replace.foundIndex = fileNameNoPath.indexOf(replaceSettings.from);
-		replace.foundIndexInNameWithPath = path.size() + 1 + replace.foundIndex;
-		replace.lengthToReplace = replaceSettings.from.length();
+		int foundIndex = fileNameNoPath.indexOf(replaceSettings.from);
+		if(foundIndex != -1)
+		{
+			replace.matches.emplace_back(ReplaceMatch{
+				foundIndex,
+				path.size() + 1 + foundIndex,
+				replaceSettings.from.length()
+			});
+		}
+
+		if(replaceSettings.replaceAllEntries and not replaceSettings.from.isEmpty())
+		{
+			foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
+			while(foundIndex != -1)
+			{
+				replace.matches.emplace_back(ReplaceMatch{
+					foundIndex,
+					path.size() + 1 + foundIndex,
+					replaceSettings.from.length()
+				});
+				foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
+			}
+		}
 	}
 	else
 	{
-		QRegularExpressionMatch match = replaceSettings.fromRegExpr.match(fileNameNoPath);
-		if (match.hasMatch()) {
-			replace.foundIndex = match.capturedStart(0);
-			replace.foundIndexInNameWithPath = path.size() + 1 + replace.foundIndex;
-			replace.lengthToReplace = match.capturedLength(0);
+		auto matchIt = replaceSettings.fromRegExpr.globalMatch(fileNameNoPath);
+		while(matchIt.hasNext())
+		{
+			QRegularExpressionMatch match = matchIt.next();
+			if(match.hasMatch())
+			{
+				replace.matches.emplace_back(ReplaceMatch{
+					match.capturedStart(0),
+					path.size() + 1 + match.capturedStart(0),
+					match.capturedLength(0)
+				});
+			}
+			if(not replaceSettings.replaceAllEntries)
+				break;
 		}
 	}
 
-	if(replace.foundIndex != -1)
+	if(replace.HasMatches())
 	{
-		if((not replaceSettings.fromRegExprEnabled and replace.lengthToReplace <= 0)
-				or (replaceSettings.fromRegExprEnabled and replace.lengthToReplace < 0))
+		for(const auto &match: replace.matches)
 		{
-			replace.error = "replace length = "+QSn(replace.lengthToReplace);
-			return replace;
+			if((not replaceSettings.fromRegExprEnabled and match.lengthToReplace <= 0)
+					or (replaceSettings.fromRegExprEnabled and match.lengthToReplace < 0))
+			{
+				replace.error = "replace length = "+QSn(match.lengthToReplace);
+				return replace;
+			}
 		}
 
 		replace.from = fi.filePath();
-		replace.to = fi.path() + "/" + fileNameNoPath.replace(replace.foundIndex, replace.lengthToReplace, replaceSettings.to);
+		QString newFileName = fileNameNoPath;
+		for(auto it = replace.matches.rbegin(); it != replace.matches.rend(); ++it)
+		{
+			newFileName.replace(it->foundIndex, it->lengthToReplace, replaceSettings.to);
+		}
+		replace.to = fi.path() + "/" + newFileName;
 	}
 
 	return replace;
@@ -308,6 +392,7 @@ void setting::VarFromStr(const QString &str)
 		var_from_str(const QString &str): str{str} {}
 		void operator()(QString *strPtr) { *strPtr = str; }
 		void operator()(QByteArray *byteArr) { *byteArr = ByteArrFromStr(str); }
+		void operator()(bool *boolPtr) { *boolPtr = (str == "true" or str == "1"); }
 		void operator()(QWidgetGeometry wGeo) { wGeo.widget->restoreGeometry(ByteArrFromStr(str)); }
 		void operator()(QSplitterState splState) { splState.splitter->restoreState(ByteArrFromStr(str)); }
 		QString str;
@@ -321,6 +406,7 @@ QString setting::VarToStr()
 	struct var_to_str {
 		QString operator()(QString *strPtr) const { return *strPtr; }
 		QString operator()(QByteArray *byteArr) { return ByteArrToStr(*byteArr); }
+		QString operator()(bool *boolPtr) { return *boolPtr ? "true" : "false"; }
 		QString operator()(QWidgetGeometry wGeo) { return ByteArrToStr(wGeo.widget->saveGeometry()); }
 		QString operator()(QSplitterState splState) { return ByteArrToStr(splState.splitter->saveState()); }
 	};

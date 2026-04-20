@@ -12,6 +12,7 @@
 #include <QTextEdit>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QRadioButton>
 #include <QVBoxLayout>
 #include <QSettings>
 #include <QSplitter>
@@ -30,7 +31,7 @@ struct QSplitterState
 	QSplitterState(QSplitter *splitter): splitter{splitter} {}
 };
 
-using var_setting = std::variant<QString*, QByteArray*, QWidgetGeometry, QSplitterState>;
+using var_setting = std::variant<QString*, QByteArray*, bool*, QWidgetGeometry, QSplitterState>;
 
 struct setting
 {
@@ -43,10 +44,19 @@ struct setting
 
 struct ReplaceSettings
 {
+	QString error;
 	QString from;
 	QString to;
 	bool fromRegExprEnabled;
+	bool replaceAllEntries;
 	QRegularExpression fromRegExpr;
+};
+
+struct ReplaceMatch
+{
+	int foundIndex = -1;
+	int foundIndexInNameWithPath = -1;
+	int lengthToReplace = 0;
 };
 
 struct Replace
@@ -54,9 +64,9 @@ struct Replace
 	QString error;
 	QString from;
 	QString to;
-	int foundIndex = -1;
-	int foundIndexInNameWithPath = -1;
-	int lengthToReplace = 0;
+	std::vector<ReplaceMatch> matches;
+
+	bool HasMatches() const { return not matches.empty(); }
 };
 
 class MainWidget : public QWidget
@@ -69,6 +79,9 @@ public:
 
 private:
 	void CreateBottomRow(QVBoxLayout *vloMain);
+	void UpdateFindResHighlight();
+	void ClearFindResHighlight();
+	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
 
 	void SaveSettings();
 	void LoadSettings();
@@ -82,20 +95,31 @@ private:
 	QLineEdit *leFilter = new QLineEdit;
 	QCheckBox *checkBoxIncludeSubcats = new QCheckBox("Include subcats");
 	QCheckBox *checkBoxRegExprInFrom = new QCheckBox("Reg. expr. in from");
+	QRadioButton *radioReplaceFirst = new QRadioButton("First occurrence");
+	QRadioButton *radioReplaceAll = new QRadioButton("All occurrences");
 	QLineEdit *leFrom = new QLineEdit;
 	QLineEdit *leTo = new QLineEdit;
 
 	QTextEdit *textEditFindRes = new QTextEdit;
+	bool replaceAllEntries = false;
 
 	void SlotScan();
 	void SlotReplace();
 	ReplaceSettings ReplaceSettingsGet()
 	{
-		return { leFrom->text(),
-				 leTo->text(),
-				 checkBoxRegExprInFrom->isChecked(),
-				 QRegularExpression(leFrom->text())
-				};
+		ReplaceSettings settings {
+			"",
+			leFrom->text(),
+			leTo->text(),
+			checkBoxRegExprInFrom->isChecked(),
+			radioReplaceAll->isChecked(),
+			QRegularExpression(leFrom->text())
+		};
+
+		if(settings.fromRegExprEnabled and not settings.fromRegExpr.isValid())
+			settings.error = settings.fromRegExpr.errorString();
+
+		return settings;
 	}
 	Replace PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings);
 
