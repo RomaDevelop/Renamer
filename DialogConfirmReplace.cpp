@@ -1,4 +1,4 @@
-#include "DialogConfirmReplace.h"
+﻿#include "DialogConfirmReplace.h"
 
 #include "MainWidget.h"
 
