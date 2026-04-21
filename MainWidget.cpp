@@ -2,23 +2,19 @@
 
 #include "DialogConfirmReplace.h"
 
-#include <set>
-
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDirIterator>
 #include <QMetaObject>
-#include <QDebug>
 #include <QMessageBox>
-#include <QElapsedTimer>
 #include <QEventLoop>
-#include <QFile>
 #include <QLabel>
 #include <QProgressDialog>
 #include <QSplitter>
 #include <QSettings>
 #include <QDateTime>
 #include <QDir>
+#include <QTimer>
 
 #include "MyQShortings.h"
 #include "MyQFileDir.h"
@@ -29,10 +25,9 @@
 MainWidget::MainWidget(QWidget *parent)
 	: QWidget(parent)
 {
-	leFilter->setDisabled(true);
 	textEditDirs->setLineWrapMode(QTextEdit::NoWrap);
 	textEditFindRes->setLineWrapMode(QTextEdit::NoWrap);
-	comboFindResView->addItem("Показывать изменяемые строки");
+	comboFindResView->addItem("Показывать только изменяемые строки");
 	comboFindResView->addItem("Показывать все строки");
 
 	checkBoxIncludeSubcats->setChecked(true);
@@ -49,8 +44,6 @@ MainWidget::MainWidget(QWidget *parent)
 
 	vloLeft->addWidget(new QLabel("Dirs:"));
 	vloLeft->addWidget(textEditDirs);
-	vloLeft->addWidget(new QLabel("Filter:"));
-	vloLeft->addWidget(leFilter);
 	vloLeft->addWidget(checkBoxIncludeSubcats);
 	vloLeft->addWidget(checkBoxRegExprInFrom);
 	radioReplaceFirst->setChecked(true);
@@ -169,27 +162,16 @@ std::vector<std::pair<int, int>> MainWidget::GetHighlightRanges(const QStringLis
 		{
 			for(const auto &match: replace.matches)
 			{
-				int add = match.lengthToReplace == 0 ? 1 : 0;
+				int add = match.indexInSrc.length == 0 ? 1 : 0;
 				if(showInfoForAdd and add != 0) *showInfoForAdd = true;
-				ranges.emplace_back(rowStart + match.foundIndexInNameWithPath,
-									rowStart + match.foundIndexInNameWithPath + match.lengthToReplace + add);
+				ranges.emplace_back(rowStart + match.indexInSrc.startIndexInNameWithPath,
+									rowStart + match.indexInSrc.startIndexInNameWithPath + match.indexInSrc.length + add);
 			}
 		}
 		rowStart += row.size() + 1;
 	}
 
 	return ranges;
-}
-
-void MainWidget::UpdateFindResHighlight()
-{
-	ClearFindResHighlight();
-
-	auto settings = ReplaceSettingsGet();
-	auto rows = GetRows(textEditFindRes);
-	auto ranges = GetHighlightRanges(rows, settings);
-	if(not ranges.empty())
-		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
 }
 
 QStringList MainWidget::GetDisplayedFindResRows() const
@@ -281,10 +263,10 @@ void MainWidget::SlotReplace()
 
 	if(rows.isEmpty()) { QMbError("Empty find res"); return; }
 
-	std::vector<Replace> replaces;
+	std::vector<ReplaceRow> replaces;
 	for(auto &row:rows)
 	{
-		Replace replace = PrepareReplaceForRow(row, regStgs);
+		ReplaceRow replace = PrepareReplaceForRow(row, regStgs);
 		if(replace.error.isEmpty())
 		{
 			if(replace.HasMatches())
@@ -308,7 +290,7 @@ void MainWidget::SlotReplace()
 
 	if(not DialogConfirmReplace::Confirm(replaces, this)) return;
 
-	std::vector<Replace> enabledReplaces;
+	std::vector<ReplaceRow> enabledReplaces;
 	enabledReplaces.reserve(replaces.size());
 	for(auto &rep:replaces)
 	{
@@ -334,12 +316,11 @@ void MainWidget::SlotReplace()
 	progressDialog.show();
 
 	QEventLoop waitLoop;
-	QStringList threadErrors;
-	QStringList treadLogs;
-	QString threadStartError;
+	QStringList workerErrors;
+	QStringList workerLogs;
 
 	renameThread.stopper = false;
-	bool started = renameThread.start([this, enabledReplaces, &threadErrors, &treadLogs, &progressDialog, &waitLoop]() mutable {
+	bool started = renameThread.start([this, enabledReplaces, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
 		int done = 0;
 		int lastSentPercent = -1;
 		const int total = enabledReplaces.size();
@@ -348,11 +329,12 @@ void MainWidget::SlotReplace()
 		{
 			auto renameError = MyQFileDir::Rename(rep.from, rep.to, true);
 			if(renameError.isEmpty())
-				treadLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
+				workerLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
 			else
 			{
 				QString errorText = "error, was not renamed: " + rep.from + " -> " + rep.to + "\n" + renameError;
-				threadErrors += errorText;
+				workerErrors += errorText;
+				workerLogs += errorText;
 			}
 
 			done++;
@@ -374,14 +356,20 @@ void MainWidget::SlotReplace()
 	if(not started)
 	{
 		QMbError("Rename thread was not started");
+		return;
+	}
+	else
+	{
+		waitLoop.exec();
+		renameThread.finish(10);
 	}
 
 	progressDialog.setValue(100);
 
-	if(!threadErrors.isEmpty()) threadErrors.prepend("-------------------\nerrors in thread:");
-	if(!treadLogs.isEmpty())    treadLogs.prepend("-------------------\nlogs in thread:");
-	errors += threadErrors;
-	logs += treadLogs;
+	if(!workerErrors.isEmpty()) workerErrors.prepend("-------------------\nerrors in thread:");
+	if(!workerLogs.isEmpty())    workerLogs.prepend("-------------------\nlogs in thread:");
+	errors += workerErrors;
+	logs += workerLogs;
 
 	SaveLogs(logs, errors);
 
@@ -444,9 +432,9 @@ void MainWidget::OpenLogsDir()
 	}
 }
 
-Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings) const
+ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings) const
 {
-	Replace replace;
+	ReplaceRow replace;
 	QFileInfo fi(row);
 	QString fileNameNoPath = fi.fileName();
 	QString path = fi.path();
@@ -461,11 +449,11 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 		int foundIndex = fileNameNoPath.indexOf(replaceSettings.from);
 		if(foundIndex != -1)
 		{
-			replace.matches.emplace_back(ReplaceMatch{
+			replace.matches.emplace_back(OneMatch(Index(
 				foundIndex,
 				path.size() + 1 + foundIndex,
 				replaceSettings.from.length()
-			});
+			)));
 		}
 
 		if(replaceSettings.replaceAllEntries and not replaceSettings.from.isEmpty())
@@ -473,11 +461,11 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 			foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
 			while(foundIndex != -1)
 			{
-				replace.matches.emplace_back(ReplaceMatch{
+				replace.matches.emplace_back(OneMatch(Index(
 					foundIndex,
 					path.size() + 1 + foundIndex,
 					replaceSettings.from.length()
-				});
+				)));
 				foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
 			}
 		}
@@ -490,11 +478,11 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 			QRegularExpressionMatch match = matchIt.next();
 			if(match.hasMatch())
 			{
-				replace.matches.emplace_back(ReplaceMatch{
+				replace.matches.emplace_back(OneMatch(Index(
 					match.capturedStart(0),
 					path.size() + 1 + match.capturedStart(0),
 					match.capturedLength(0)
-				});
+				)));
 			}
 			if(not replaceSettings.replaceAllEntries)
 				break;
@@ -505,10 +493,10 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 	{
 		for(const auto &match: replace.matches)
 		{
-			if((not replaceSettings.fromRegExprEnabled and match.lengthToReplace <= 0)
-					or (replaceSettings.fromRegExprEnabled and match.lengthToReplace < 0))
+			if((not replaceSettings.fromRegExprEnabled and match.indexInSrc.length <= 0)
+					or (replaceSettings.fromRegExprEnabled and match.indexInSrc.length < 0))
 			{
-				replace.error = "replace length = "+QSn(match.lengthToReplace);
+				replace.error = "replace length = "+QSn(match.indexInSrc.length);
 				return replace;
 			}
 		}
@@ -516,16 +504,16 @@ Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSetti
 		replace.from = fi.filePath();
 		QString newFileName = fileNameNoPath;
 		int lenDiff = 0;
-		for(const auto &match : replace.matches)
+		for(auto &match : replace.matches)
 		{
-			int foundIndexInResult = match.foundIndex + lenDiff;
-			replace.matchesInResult.emplace_back(ReplaceMatch{
+			int foundIndexInResult = match.indexInSrc.startIndex + lenDiff;
+			match.indexInResult = Index(
 				foundIndexInResult,
 				path.size() + 1 + foundIndexInResult,
 				replaceSettings.to.size()
-			});
-			newFileName.replace(foundIndexInResult, match.lengthToReplace, replaceSettings.to);
-			lenDiff += replaceSettings.to.size() - match.lengthToReplace;
+			);
+			newFileName.replace(foundIndexInResult, match.indexInSrc.length, replaceSettings.to);
+			lenDiff += replaceSettings.to.size() - match.indexInSrc.length;
 		}
 		replace.to = fi.path() + "/" + newFileName;
 	}

@@ -19,9 +19,9 @@ class DialogConfirmReplace : public QDialog
 	Q_OBJECT
 
 public:
-	explicit DialogConfirmReplace(std::vector<Replace> &replaces, QWidget *parent = nullptr);
+	explicit DialogConfirmReplace(std::vector<ReplaceRow> &replaces, QWidget *parent = nullptr);
 
-	static bool Confirm(std::vector<Replace> &replaces, QWidget *parent = nullptr);
+	static bool Confirm(std::vector<ReplaceRow> &replaces, QWidget *parent = nullptr);
 
 private:
 	void FillTable();
@@ -34,7 +34,7 @@ private:
 	void SetAllRowsChecked(Qt::CheckState state);
 	void InvertRowsChecked();
 
-	std::vector<Replace> &replaces;
+	std::vector<ReplaceRow> &replaces;
 	std::vector<QLabel*> currentValueLabels;
 	std::vector<QLabel*> newValueLabels;
 	std::set<int> rowsInViewportCached;

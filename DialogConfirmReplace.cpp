@@ -1,7 +1,5 @@
 ﻿#include "DialogConfirmReplace.h"
 
-#include "MainWidget.h"
-
 #include <algorithm>
 
 #include <QCheckBox>
@@ -26,10 +24,10 @@ namespace
 struct PreviewText
 {
 	QString text;
-	std::vector<ReplaceMatch> matches;
+	std::vector<OneMatch> matches;
 };
 
-PreviewText TrimPreviewText(const QString &text, const std::vector<ReplaceMatch> &matches, int trimStartPercent)
+PreviewText TrimPreviewText(const QString &text, const std::vector<OneMatch> &matches, int trimStartPercent, bool useResultIndexes)
 {
 	PreviewText result;
 	int trimCount = text.size() * trimStartPercent / 100;
@@ -37,37 +35,38 @@ PreviewText TrimPreviewText(const QString &text, const std::vector<ReplaceMatch>
 
 	for(const auto &match : matches)
 	{
-		int matchStart = match.foundIndexInNameWithPath;
-		if(match.lengthToReplace == 0)
+		const Index &index = useResultIndexes ? match.indexInResult : match.indexInSrc;
+		int matchStart = index.startIndexInNameWithPath;
+		if(index.length == 0)
 		{
 			if(matchStart < trimCount) continue;
 
-			result.matches.emplace_back(ReplaceMatch{
+			result.matches.emplace_back(OneMatch(Index(
 				matchStart - trimCount,
 				matchStart - trimCount,
 				0
-			});
+			)));
 			continue;
 		}
 
-		int matchEnd = matchStart + match.lengthToReplace;
+		int matchEnd = matchStart + index.length;
 		if(matchEnd <= trimCount) continue;
 
 		int visibleStart = std::max(matchStart, trimCount);
 		int visibleEnd = std::min(matchEnd, text.size());
 		if(visibleEnd <= visibleStart) continue;
 
-		result.matches.emplace_back(ReplaceMatch{
+		result.matches.emplace_back(OneMatch(Index(
 			visibleStart - trimCount,
 			visibleStart - trimCount,
 			visibleEnd - visibleStart
-		});
+		)));
 	}
 
 	return result;
 }
 
-QString HighlightedText(const QString &text, const std::vector<ReplaceMatch> &matches)
+QString HighlightedText(const QString &text, const std::vector<OneMatch> &matches)
 {
 	auto toHtmlEscaped = [](const QString &value){ return value.toHtmlEscaped().replace('\n', "<br>"); };
 
@@ -75,10 +74,11 @@ QString HighlightedText(const QString &text, const std::vector<ReplaceMatch> &ma
 	int currentIndex = 0;
 	for(const auto &match : matches)
 	{
-		if(match.foundIndex < currentIndex) continue;
+		const Index &index = match.indexInSrc;
+		if(index.startIndex < currentIndex) continue;
 
-		int safeStart = std::clamp(match.foundIndex, 0, text.size());
-		int safeLength = std::clamp(match.lengthToReplace, 0, text.size() - safeStart);
+		int safeStart = std::clamp(index.startIndex, 0, text.size());
+		int safeLength = std::clamp(index.length, 0, text.size() - safeStart);
 
 		html += toHtmlEscaped(text.mid(currentIndex, safeStart - currentIndex));
 		html += "<span style=\"background-color:#fff59d;\">";
@@ -107,7 +107,7 @@ QLabel *CreatePreviewLabel()
 }
 }
 
-DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QWidget *parent)
+DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef, QWidget *parent)
 	: QDialog(parent),
 	  replaces(replacesRef),
 	  timerPreviewUpdate(new QTimer(this))
@@ -198,7 +198,7 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<Replace> &replacesRef, QW
 	});
 }
 
-bool DialogConfirmReplace::Confirm(std::vector<Replace> &replaces, QWidget *parent)
+bool DialogConfirmReplace::Confirm(std::vector<ReplaceRow> &replaces, QWidget *parent)
 {
 	DialogConfirmReplace dialog(replaces, parent);
 	return dialog.exec() == QDialog::Accepted;
@@ -290,8 +290,8 @@ void DialogConfirmReplace::ProcessPreviewUpdateChunk()
 void DialogConfirmReplace::UpdatePreviewRow(int row)
 {
 	const auto &replace = replaces[row];
-	auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercentPending);
-	auto newPreview = TrimPreviewText(replace.to, replace.matchesInResult, trimStartPercentPending);
+	auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercentPending, false);
+	auto newPreview = TrimPreviewText(replace.to, replace.matches, trimStartPercentPending, true);
 
 	currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
 	newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));

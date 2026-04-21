@@ -1,22 +1,16 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <atomic>
-#include <memory>
-#include <thread>
 #include <variant>
 #include <vector>
 
 #include <QRegularExpression>
-#include <QMainWindow>
 #include <QLineEdit>
 #include <QTextEdit>
-#include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QRadioButton>
 #include <QVBoxLayout>
-#include <QSettings>
 #include <QSplitter>
 #include <QStringList>
 
@@ -56,20 +50,41 @@ struct ReplaceSettings
 	QRegularExpression fromRegExpr;
 };
 
-struct ReplaceMatch
+struct Index
 {
-	int foundIndex = -1;
-	int foundIndexInNameWithPath = -1;
-	int lengthToReplace = 0;
+	int startIndex = -1;
+	int startIndexInNameWithPath = -1;
+	int length = 0;
+
+	Index() = default;
+	Index(int startIndex, int startIndexInNameWithPath, int length)
+		: startIndex{startIndex},
+		  startIndexInNameWithPath{startIndexInNameWithPath},
+		  length{length}
+	{}
 };
 
-struct Replace
+struct OneMatch
+{
+	Index indexInSrc;
+	Index indexInResult;
+
+	OneMatch() = default;
+	explicit OneMatch(const Index &indexInSrc)
+		: indexInSrc{indexInSrc}
+	{}
+	OneMatch(const Index &indexInSrc, const Index &indexInResult)
+		: indexInSrc{indexInSrc},
+		  indexInResult{indexInResult}
+	{}
+};
+
+struct ReplaceRow
 {
 	QString error;
 	QString from;
 	QString to;
-	std::vector<ReplaceMatch> matches;
-	std::vector<ReplaceMatch> matchesInResult;
+	std::vector<OneMatch> matches;
 	bool enabled = true;
 
 	bool HasMatches() const { return not matches.empty(); }
@@ -87,7 +102,6 @@ private:
 	void CreateBottomRow(QVBoxLayout *vloMain);
 	void RefreshFindResView(bool *showInfoForAdd = nullptr);
 	QStringList GetDisplayedFindResRows() const;
-	void UpdateFindResHighlight();
 	void ClearFindResHighlight();
 	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
 	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
@@ -104,7 +118,6 @@ private:
 
 	QSplitter *splitter;
 	QTextEdit *textEditDirs = new QTextEdit;
-	QLineEdit *leFilter = new QLineEdit;
 	QCheckBox *checkBoxIncludeSubcats = new QCheckBox("Include subcats");
 	QCheckBox *checkBoxRegExprInFrom = new QCheckBox("Reg. expr. in from");
 	QRadioButton *radioReplaceFirst = new QRadioButton("First occurrence");
@@ -136,7 +149,7 @@ private:
 
 		return settings;
 	}
-	Replace PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings) const;
+	ReplaceRow PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings) const;
 
 	static QStringList GetRows(QTextEdit *textEdit);
 };
