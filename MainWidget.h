@@ -89,7 +89,7 @@ private:
 	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
 	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
 	QString LogsDirPath() const;
-	QString SaveLogs(const QStringList &logs, const QStringList &errors) const;
+	void SaveLogs(const QStringList &logs, const QStringList &errors) const;
 	void OpenLogsDir();
 
 	void SaveSettings();

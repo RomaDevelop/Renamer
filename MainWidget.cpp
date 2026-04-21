@@ -294,12 +294,12 @@ void MainWidget::SlotReplace()
 	progressDialog.show();
 
 	QEventLoop waitLoop;
-	QStringList workerErrors;
-	QStringList workerLogs;
+	QStringList threadErrors;
+	QStringList treadLogs;
 	QString threadStartError;
 
 	renameThread.stopper = false;
-	bool started = renameThread.start([this, enabledReplaces, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
+	bool started = renameThread.start([this, enabledReplaces, &threadErrors, &treadLogs, &progressDialog, &waitLoop]() mutable {
 		int done = 0;
 		int lastSentPercent = -1;
 		const int total = enabledReplaces.size();
@@ -308,12 +308,11 @@ void MainWidget::SlotReplace()
 		{
 			auto renameError = MyQFileDir::Rename(rep.from, rep.to, true);
 			if(renameError.isEmpty())
-				workerLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
+				treadLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
 			else
 			{
 				QString errorText = "error, was not renamed: " + rep.from + " -> " + rep.to + "\n" + renameError;
-				workerErrors += errorText;
-				workerLogs += errorText;
+				threadErrors += errorText;
 			}
 
 			done++;
@@ -331,30 +330,20 @@ void MainWidget::SlotReplace()
 			waitLoop.quit();
 		}, Qt::QueuedConnection);
 	});
+
 	if(not started)
 	{
-		threadStartError = "Rename thread already works";
-	}
-	else
-	{
-		waitLoop.exec();
-		renameThread.finish(10);
+		QMbError("Rename thread was not started");
 	}
 
 	progressDialog.setValue(100);
 
-	if(not threadStartError.isEmpty())
-	{
-		QMbError(threadStartError);
-		return;
-	}
+	if(!threadErrors.isEmpty()) threadErrors.prepend("-------------------\nerrors in thread:");
+	if(!treadLogs.isEmpty())    treadLogs.prepend("-------------------\nlogs in thread:");
+	errors += threadErrors;
+	logs += treadLogs;
 
-	errors += workerErrors;
-	logs += workerLogs;
-
-	QString logFile = SaveLogs(logs, errors);
-	if(logFile.isEmpty())
-		errors += "error saving log file";
+	SaveLogs(logs, errors);
 
 	if(not errors.isEmpty())
 	{
@@ -362,8 +351,6 @@ void MainWidget::SlotReplace()
 		if(answ == QMessageBox::Yes)
 		{
 			QStringList textToShow;
-			if(not logFile.isEmpty())
-				textToShow.prepend("Log file: " + logFile);
 			textToShow += BuildLogsText(logs, errors);
 			MyQDialogs::ShowText(textToShow.join("\n\n"));
 		}
@@ -389,26 +376,17 @@ QString MainWidget::LogsDirPath() const
 	return MyQDifferent::PathToExe() + "/files/logs";
 }
 
-QString MainWidget::SaveLogs(const QStringList &logs, const QStringList &errors) const
+void MainWidget::SaveLogs(const QStringList &logs, const QStringList &errors) const
 {
 	QString logsDir = LogsDirPath();
-	if(not QDir().mkpath(logsDir))
-	{
-		qCritical() << "can't create logs dir" << logsDir;
-		return "";
-	}
+	if(not QDir().mkpath(logsDir)) { QMbError("SaveLogs can't create dir "+logsDir); return; }
 
 	auto removeOldFilesError = MyQFileDir::RemoveOldFiles(logsDir, 29);
-	if(not removeOldFilesError.isEmpty())
-	{
-		qCritical() << "RemoveOldFiles error:" << removeOldFilesError;
-	}
+	if(not removeOldFilesError.isEmpty()) QMbError("SaveLogs RemoveOldFiles error: " + removeOldFilesError);
 
 	QString logFile = logsDir + "/" + QDateTime::currentDateTime().toString("yyyy.MM.dd_hh-mm-ss.zzz") + ".txt";
 	if(not MyQFileDir::WriteFile(logFile, BuildLogsText(logs, errors)))
-		return "";
-
-	return logFile;
+		QMbError("SaveLogs WriteFile error in " + logFile);
 }
 
 void MainWidget::OpenLogsDir()
