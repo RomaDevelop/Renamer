@@ -100,10 +100,11 @@ public:
 
 private:
 	void CreateBottomRow(QVBoxLayout *vloMain);
+	void UpdatePreparedReplaces(bool *showInfoForAdd = nullptr);
 	void RefreshFindResView(bool *showInfoForAdd = nullptr);
-	QStringList GetDisplayedFindResRows() const;
+	std::vector<int> GetDisplayedReplaceIndexes() const;
 	void ClearFindResHighlight();
-	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
+	std::vector<std::pair<int, int>> GetHighlightRanges(const std::vector<int> &displayedIndexes, bool *showInfoForAdd = nullptr) const;
 	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
 	QString LogsDirPath() const;
 	void SaveLogs(const QStringList &logs, const QStringList &errors) const;
@@ -128,6 +129,7 @@ private:
 	QComboBox *comboFindResView = new QComboBox;
 	QTextEdit *textEditFindRes = new QTextEdit;
 	QStringList findResRowsAll;
+	std::vector<ReplaceRow> preparedReplacesAll;
 	bool replaceAllEntries = false;
 	thread_box renameThread {"renameThread"};
 
@@ -150,8 +152,6 @@ private:
 		return settings;
 	}
 	ReplaceRow PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings) const;
-
-	static QStringList GetRows(QTextEdit *textEdit);
 };
 
 #endif // MAINWINDOW_H

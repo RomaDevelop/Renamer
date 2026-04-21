@@ -68,6 +68,7 @@ MainWidget::MainWidget(QWidget *parent)
 	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
 	connect(checkBoxRegExprInFrom, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
 	connect(leFrom, &QLineEdit::textChanged, this, [this](){ RefreshFindResView(); });
+	connect(leTo, &QLineEdit::textChanged, this, [this](){ RefreshFindResView(); });
 	connect(comboFindResView, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](){ RefreshFindResView(); });
 
 	QTimer::singleShot(0, [this](){ LoadSettings(); });
@@ -147,63 +148,86 @@ void MainWidget::ClearFindResHighlight()
 	cursor.setCharFormat(format);
 }
 
-std::vector<std::pair<int, int>> MainWidget::GetHighlightRanges(const QStringList & rows, const ReplaceSettings & replaceSettings, bool * showInfoForAdd)
+void MainWidget::UpdatePreparedReplaces(bool *showInfoForAdd)
+{
+	if(showInfoForAdd) *showInfoForAdd = false;
+
+	preparedReplacesAll.clear();
+	preparedReplacesAll.reserve(findResRowsAll.size());
+
+	auto settings = ReplaceSettingsGet();
+	for(const auto &row : findResRowsAll)
+	{
+		ReplaceRow replace;
+		if(settings.from.isEmpty() or not settings.error.isEmpty())
+		{
+			replace.from = QFileInfo(row).filePath();
+		}
+		else
+		{
+			replace = PrepareReplaceForRow(row, settings);
+		}
+		preparedReplacesAll.emplace_back(std::move(replace));
+	}
+}
+
+std::vector<int> MainWidget::GetDisplayedReplaceIndexes() const
+{
+	std::vector<int> displayedIndexes;
+	displayedIndexes.reserve(preparedReplacesAll.size());
+
+	const bool showChangedOnly = comboFindResView->currentIndex() == 0;
+	for(int i = 0; i < static_cast<int>(preparedReplacesAll.size()); ++i)
+	{
+		const auto &replace = preparedReplacesAll[i];
+		if(showChangedOnly and (not replace.error.isEmpty() or not replace.HasMatches()))
+			continue;
+		displayedIndexes.emplace_back(i);
+	}
+
+	return displayedIndexes;
+}
+
+std::vector<std::pair<int, int>> MainWidget::GetHighlightRanges(const std::vector<int> &displayedIndexes, bool *showInfoForAdd) const
 {
 	if(showInfoForAdd) *showInfoForAdd = false;
 
 	std::vector<std::pair<int, int>> ranges;
-	if(replaceSettings.from.isEmpty() or not replaceSettings.error.isEmpty()) return ranges;
-
 	int rowStart = 0;
-	for(const auto &row: rows)
+	for(int index : displayedIndexes)
 	{
-		auto replace = PrepareReplaceForRow(row, replaceSettings);
-		if(replace.error.isEmpty())
+		const auto &replace = preparedReplacesAll[index];
+		for(const auto &match : replace.matches)
 		{
-			for(const auto &match: replace.matches)
-			{
-				int add = match.indexInSrc.length == 0 ? 1 : 0;
-				if(showInfoForAdd and add != 0) *showInfoForAdd = true;
-				ranges.emplace_back(rowStart + match.indexInSrc.startIndexInNameWithPath,
-									rowStart + match.indexInSrc.startIndexInNameWithPath + match.indexInSrc.length + add);
-			}
+			int add = match.indexInSrc.length == 0 ? 1 : 0;
+			if(showInfoForAdd and add != 0) *showInfoForAdd = true;
+			ranges.emplace_back(rowStart + match.indexInSrc.startIndexInNameWithPath,
+								rowStart + match.indexInSrc.startIndexInNameWithPath + match.indexInSrc.length + add);
 		}
-		rowStart += row.size() + 1;
+		rowStart += replace.from.size() + 1;
 	}
 
 	return ranges;
 }
 
-QStringList MainWidget::GetDisplayedFindResRows() const
-{
-	if(comboFindResView->currentIndex() != 0) return findResRowsAll;
-
-	auto settings = ReplaceSettingsGet();
-	QStringList rowsToShow;
-	for(const auto &row : findResRowsAll)
-	{
-		auto replace = PrepareReplaceForRow(row, settings);
-		if(replace.error.isEmpty() and replace.HasMatches())
-			rowsToShow += row;
-	}
-
-	return rowsToShow;
-}
-
 void MainWidget::RefreshFindResView(bool *showInfoForAdd)
 {
+	UpdatePreparedReplaces(showInfoForAdd);
+	auto displayedIndexes = GetDisplayedReplaceIndexes();
+	QStringList rows;
+	rows.reserve(static_cast<int>(displayedIndexes.size()));
+	for(int index : displayedIndexes)
+	{
+		rows += preparedReplacesAll[index].from;
+	}
+
 	textEditFindRes->clear();
 	textEditFindRes->setCurrentCharFormat(QTextCharFormat());
-	textEditFindRes->setPlainText(GetDisplayedFindResRows().join('\n'));
-
-	bool localShowInfoForAdd = false;
-	if(not showInfoForAdd) showInfoForAdd = &localShowInfoForAdd;
+	textEditFindRes->setPlainText(rows.join('\n'));
 
 	ClearFindResHighlight();
 
-	auto settings = ReplaceSettingsGet();
-	auto rows = GetRows(textEditFindRes);
-	auto ranges = GetHighlightRanges(rows, settings, showInfoForAdd);
+	auto ranges = GetHighlightRanges(displayedIndexes, showInfoForAdd);
 	if(not ranges.empty())
 		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
 }
@@ -212,7 +236,15 @@ void MainWidget::SlotScan()
 {
 	findResRowsAll.clear();
 
-	auto rows = GetRows(textEditDirs);
+	auto rows = textEditDirs->toPlainText().split('\n');
+	for(auto &row : rows)
+	{
+		if(row.endsWith('\r')) row.chop(1);
+		while(row.endsWith(' ')) row.chop(1);
+		while(row.startsWith(' ')) row.remove(0, 1);
+	}
+	auto removeRes = std::remove_if(rows.begin(), rows.end(), [](const QString &row){ return row.isEmpty(); });
+	rows.erase(removeRes, rows.end());
 
 	if(rows.isEmpty()) { QMbError("Empty dirs"); return; }
 
@@ -259,25 +291,27 @@ void MainWidget::SlotReplace()
 	QStringList errors;
 	QStringList logs;
 
-	auto rows = GetRows(textEditFindRes);
+	auto displayedIndexes = GetDisplayedReplaceIndexes();
 
-	if(rows.isEmpty()) { QMbError("Empty find res"); return; }
+	if(displayedIndexes.empty()) { QMbError("Empty find res"); return; }
 
 	std::vector<ReplaceRow> replaces;
-	for(auto &row:rows)
+	replaces.reserve(displayedIndexes.size());
+	for(int index : displayedIndexes)
 	{
-		ReplaceRow replace = PrepareReplaceForRow(row, regStgs);
-		if(replace.error.isEmpty())
+		const auto &replace = preparedReplacesAll[index];
+		if(not replace.error.isEmpty())
 		{
-			if(replace.HasMatches())
-				replaces.emplace_back(std::move(replace));
-			else logs += "doesn't contains from value, will not be renamed: " + row;
+			errors += replace.error + " in " + replace.from;
+			logs += "error, " + replace.error + " in " + replace.from;
+			continue;
 		}
-		else
+		if(not replace.HasMatches())
 		{
-			errors += replace.error + " in " + row;
-			logs += "error, " + replace.error + " in " + row;
+			logs += "doesn't contains from value, will not be renamed: " + replace.from;
+			continue;
 		}
+		replaces.emplace_back(replace);
 	}
 
 	if(not errors.isEmpty())
@@ -434,8 +468,9 @@ void MainWidget::OpenLogsDir()
 
 ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings) const
 {
-	ReplaceRow replace;
 	QFileInfo fi(row);
+	ReplaceRow replace;
+	replace.from = fi.filePath();
 	QString fileNameNoPath = fi.fileName();
 	QString path = fi.path();
 	if(not fi.isFile())
@@ -501,7 +536,6 @@ ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSe
 			}
 		}
 
-		replace.from = fi.filePath();
 		QString newFileName = fileNameNoPath;
 		int lenDiff = 0;
 		for(auto &match : replace.matches)
@@ -519,24 +553,6 @@ ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSe
 	}
 
 	return replace;
-}
-
-QStringList MainWidget::GetRows(QTextEdit * textEdit)
-{
-	auto text = textEdit->toPlainText();
-	auto rows = text.split('\n');
-
-	for(auto &row:rows)
-	{
-		if(row.endsWith('\r')) row.chop(1);
-		while(row.endsWith(' ')) row.chop(1);
-		while(row.startsWith(' ')) row.remove(0,1);
-	}
-
-	auto removeRes = std::remove_if(rows.begin(), rows.end(), [](const QString &row){ return row.isEmpty(); });
-	rows.erase(removeRes, rows.end());
-
-	return rows;
 }
 
 QByteArray ByteArrFromStr(const QString &str) { return QByteArray::fromBase64(str.toLatin1()); }
