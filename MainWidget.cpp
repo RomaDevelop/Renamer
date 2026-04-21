@@ -32,6 +32,8 @@ MainWidget::MainWidget(QWidget *parent)
 	leFilter->setDisabled(true);
 	textEditDirs->setLineWrapMode(QTextEdit::NoWrap);
 	textEditFindRes->setLineWrapMode(QTextEdit::NoWrap);
+	comboFindResView->addItem("Показывать изменяемые строки");
+	comboFindResView->addItem("Показывать все строки");
 
 	checkBoxIncludeSubcats->setChecked(true);
 
@@ -60,14 +62,20 @@ MainWidget::MainWidget(QWidget *parent)
 	vloLeft->addWidget(leTo);
 	vloLeft->addStretch();
 
-	splitter->addWidget(textEditFindRes);
+	auto w_in_r1 = new QWidget;
+	splitter->addWidget(w_in_r1);
+	auto vloRight = new QVBoxLayout(w_in_r1);
+	vloRight->setContentsMargins(0,0,0,0);
+	vloRight->addWidget(comboFindResView);
+	vloRight->addWidget(textEditFindRes);
 
 	CreateBottomRow(vloMain);
 
-	connect(radioReplaceFirst, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
-	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
-	connect(checkBoxRegExprInFrom, &QAbstractButton::toggled, this, [this](){ UpdateFindResHighlight(); });
-	connect(leFrom, &QLineEdit::textChanged, this, [this](){ UpdateFindResHighlight(); });
+	connect(radioReplaceFirst, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
+	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
+	connect(checkBoxRegExprInFrom, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
+	connect(leFrom, &QLineEdit::textChanged, this, [this](){ RefreshFindResView(); });
+	connect(comboFindResView, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](){ RefreshFindResView(); });
 
 	QTimer::singleShot(0, [this](){ LoadSettings(); });
 }
@@ -184,9 +192,43 @@ void MainWidget::UpdateFindResHighlight()
 		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
 }
 
-void MainWidget::SlotScan()
+QStringList MainWidget::GetDisplayedFindResRows() const
+{
+	if(comboFindResView->currentIndex() != 0) return findResRowsAll;
+
+	auto settings = ReplaceSettingsGet();
+	QStringList rowsToShow;
+	for(const auto &row : findResRowsAll)
+	{
+		auto replace = PrepareReplaceForRow(row, settings);
+		if(replace.error.isEmpty() and replace.HasMatches())
+			rowsToShow += row;
+	}
+
+	return rowsToShow;
+}
+
+void MainWidget::RefreshFindResView(bool *showInfoForAdd)
 {
 	textEditFindRes->clear();
+	textEditFindRes->setCurrentCharFormat(QTextCharFormat());
+	textEditFindRes->setPlainText(GetDisplayedFindResRows().join('\n'));
+
+	bool localShowInfoForAdd = false;
+	if(not showInfoForAdd) showInfoForAdd = &localShowInfoForAdd;
+
+	ClearFindResHighlight();
+
+	auto settings = ReplaceSettingsGet();
+	auto rows = GetRows(textEditFindRes);
+	auto ranges = GetHighlightRanges(rows, settings, showInfoForAdd);
+	if(not ranges.empty())
+		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
+}
+
+void MainWidget::SlotScan()
+{
+	findResRowsAll.clear();
 
 	auto rows = GetRows(textEditDirs);
 
@@ -207,13 +249,11 @@ void MainWidget::SlotScan()
 		while(dirIt.hasNext())
 		{
 			QString row = dirIt.next();
-			textEditFindRes->append(row);
+			findResRowsAll += row;
 		}
 	}
 
-	auto ranges = GetHighlightRanges(GetRows(textEditFindRes), settings, &showInfoForAdd);
-	if(not ranges.empty())
-		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
+	RefreshFindResView(&showInfoForAdd);
 
 	if(not errors.isEmpty())
 	{
@@ -404,7 +444,7 @@ void MainWidget::OpenLogsDir()
 	}
 }
 
-Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings)
+Replace MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings) const
 {
 	Replace replace;
 	QFileInfo fi(row);

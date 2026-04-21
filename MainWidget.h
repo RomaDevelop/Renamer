@@ -13,6 +13,7 @@
 #include <QTextEdit>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QRadioButton>
 #include <QVBoxLayout>
 #include <QSettings>
@@ -84,6 +85,8 @@ public:
 
 private:
 	void CreateBottomRow(QVBoxLayout *vloMain);
+	void RefreshFindResView(bool *showInfoForAdd = nullptr);
+	QStringList GetDisplayedFindResRows() const;
 	void UpdateFindResHighlight();
 	void ClearFindResHighlight();
 	std::vector<std::pair<int, int>> GetHighlightRanges(const QStringList &rows, const ReplaceSettings &replaceSettings, bool *showInfoForAdd = nullptr);
@@ -109,13 +112,15 @@ private:
 	QLineEdit *leFrom = new QLineEdit;
 	QLineEdit *leTo = new QLineEdit;
 
+	QComboBox *comboFindResView = new QComboBox;
 	QTextEdit *textEditFindRes = new QTextEdit;
+	QStringList findResRowsAll;
 	bool replaceAllEntries = false;
 	thread_box renameThread {"renameThread"};
 
 	void SlotScan();
 	void SlotReplace();
-	ReplaceSettings ReplaceSettingsGet()
+	ReplaceSettings ReplaceSettingsGet() const
 	{
 		ReplaceSettings settings {
 			"",
@@ -131,7 +136,7 @@ private:
 
 		return settings;
 	}
-	Replace PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings);
+	Replace PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings) const;
 
 	static QStringList GetRows(QTextEdit *textEdit);
 };
