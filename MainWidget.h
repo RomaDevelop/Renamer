@@ -17,16 +17,16 @@
 #include "thread_box.h"
 
 #include "Settings.h"
-#include "DialogConfirmReplace.h"
+#include "WidgetTable.h"
 
-
+enum class FromMode { undefined = 0, caseSensitive, caseInsensitive, regExpr };
 
 struct ReplaceSettings
 {
 	QString error;
 	QString from;
 	QString to;
-	bool fromRegExprEnabled;
+	FromMode fromMode;
 	bool replaceAllEntries;
 	QRegularExpression fromRegExpr;
 };
@@ -62,7 +62,6 @@ struct OneMatch
 
 struct ReplaceRow
 {
-	QString error;
 	QString from;
 	QString to;
 	std::vector<OneMatch> matches;
@@ -81,9 +80,7 @@ public:
 
 private:
 	void CreateBottomRow(QVBoxLayout *vloMain);
-	void UpdatePreparedReplaces(bool *showInfoForAdd = nullptr);
-	void RefreshFindResView(bool *showInfoForAdd = nullptr);
-	std::vector<int> GetDisplayedReplaceIndexes() const;
+	void RefreshView();
 	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
 	QString LogsDirPath() const;
 	void SaveLogs(const QStringList &logs, const QStringList &errors) const;
@@ -99,37 +96,32 @@ private:
 	QSplitter *splitter;
 	QTextEdit *textEditDirs = new QTextEdit;
 	QCheckBox *checkBoxIncludeSubcats = new QCheckBox("Include subcats");
-	QCheckBox *checkBoxRegExprInFrom = new QCheckBox("Reg. expr. in from");
+
+	QComboBox *comboFromMode = new QComboBox();
+	std::map<QString, FromMode> comboFromModeVals {
+		{"From case sensitive", FromMode::caseSensitive},
+		{"From case insensitive", FromMode::caseInsensitive},
+		{"From regular expression", FromMode::regExpr}
+	};
+	FromMode GetFromMode();
+
 	QRadioButton *radioReplaceFirst = new QRadioButton("First occurrence");
 	QRadioButton *radioReplaceAll = new QRadioButton("All occurrences");
 	QLineEdit *leFrom = new QLineEdit;
 	QLineEdit *leTo = new QLineEdit;
 
-	QComboBox *comboFindResView = new QComboBox;
-	WidgetTable *widgetTable;
-	QStringList findResRowsAll;
 	std::vector<ReplaceRow> preparedReplacesAll;
+	WidgetTable *widgetTable;
+
 	thread_box renameThread {"renameThread"};
+
+	QStringList errors;
+	void InitErrorsShowing(QHBoxLayout *hlo);
 
 	void SlotScan();
 	void SlotReplace();
-	ReplaceSettings ReplaceSettingsGet() const
-	{
-		ReplaceSettings settings {
-			"",
-			leFrom->text(),
-			leTo->text(),
-			checkBoxRegExprInFrom->isChecked(),
-			radioReplaceAll->isChecked(),
-			QRegularExpression(leFrom->text())
-		};
-
-		if(settings.fromRegExprEnabled and not settings.fromRegExpr.isValid())
-			settings.error = settings.fromRegExpr.errorString();
-
-		return settings;
-	}
-	ReplaceRow PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings) const;
+	ReplaceSettings ReplaceSettingsGet();
+	ReplaceRow PrepareReplaceForRow(const QString &row, const ReplaceSettings &replaceSettings);
 };
 
 #endif // MAINWINDOW_H

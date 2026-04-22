@@ -3,16 +3,16 @@ QT       += core gui widgets
 CONFIG += c++17
 
 SOURCES += \
-    DialogConfirmReplace.cpp \
     MainWidget.cpp \
     RowsUpdater.cpp \
+    WidgetTable.cpp \
     main.cpp
 
 HEADERS += \
-    DialogConfirmReplace.h \
     MainWidget.h \
     RowsUpdater.h \
-    Settings.h
+    Settings.h \
+    WidgetTable.h
 
 INCLUDEPATH += \
     ../include

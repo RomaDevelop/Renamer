@@ -3,6 +3,7 @@
 
 #include <vector>
 
+#include <QComboBox>
 #include <QWidget>
 
 #include "RowsUpdater.h"
@@ -24,15 +25,15 @@ public:
 
 	void FillTable();
 
+	QComboBox *comboShowAllOrFound = new QComboBox;
+
 private:
 	void SetRowTexts(int row);
 
-	void SetAllRowsChecked(Qt::CheckState state);
-	void InvertRowsChecked();
+	/// 0 = uncheked, 1 = checked, 2 = invert, >2 = checked
+	void SetAllRowsCheckState(uint val);
 
 	std::vector<ReplaceRow> &replaces;
-	std::vector<QLabel*> currentValueLabels;
-	std::vector<QLabel*> newValueLabels;
 
 	QTableWidget *table;
 	QSlider *sliderTrimmer;
@@ -40,6 +41,7 @@ private:
 
 	RowsUpdater rowsUpdater;
 	void SetRowsUpdaterArgs();
+	void SetRowsUpdaterFunction();
 };
 
 #endif // DIALOGCONFIRMREPLACE_H

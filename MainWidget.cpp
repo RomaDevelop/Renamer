@@ -1,6 +1,6 @@
 ﻿#include "MainWidget.h"
 
-#include "DialogConfirmReplace.h"
+#include "WidgetTable.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -27,8 +27,6 @@ MainWidget::MainWidget(QWidget *parent)
 	  widgetTable { new WidgetTable(preparedReplacesAll, this) }
 {
 	textEditDirs->setLineWrapMode(QTextEdit::NoWrap);
-	comboFindResView->addItem("Показывать только изменяемые строки");
-	comboFindResView->addItem("Показывать все строки");
 
 	checkBoxIncludeSubcats->setChecked(true);
 
@@ -45,7 +43,8 @@ MainWidget::MainWidget(QWidget *parent)
 	vloLeft->addWidget(new QLabel("Dirs:"));
 	vloLeft->addWidget(textEditDirs);
 	vloLeft->addWidget(checkBoxIncludeSubcats);
-	vloLeft->addWidget(checkBoxRegExprInFrom);
+	vloLeft->addWidget(comboFromMode);
+	for(auto &node:comboFromModeVals) comboFromMode->addItem(node.first);
 	radioReplaceFirst->setChecked(true);
 	vloLeft->addWidget(radioReplaceFirst);
 	vloLeft->addWidget(radioReplaceAll);
@@ -59,17 +58,16 @@ MainWidget::MainWidget(QWidget *parent)
 	splitter->addWidget(w_in_r1);
 	auto vloRight = new QVBoxLayout(w_in_r1);
 	vloRight->setContentsMargins(0,0,0,0);
-	vloRight->addWidget(comboFindResView);
 	vloRight->addWidget(widgetTable);
 
 	CreateBottomRow(vloMain);
 
-	connect(radioReplaceFirst, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
-	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
-	connect(checkBoxRegExprInFrom, &QAbstractButton::toggled, this, [this](){ RefreshFindResView(); });
-	connect(leFrom, &QLineEdit::textChanged, this, [this](){ RefreshFindResView(); });
-	connect(leTo, &QLineEdit::textChanged, this, [this](){ RefreshFindResView(); });
-	connect(comboFindResView, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](){ RefreshFindResView(); });
+	connect(radioReplaceFirst, &QAbstractButton::toggled, this, [this](){ RefreshView(); });
+	connect(radioReplaceAll, &QAbstractButton::toggled, this, [this](){ RefreshView(); });
+	connect(comboFromMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](){ RefreshView(); });
+	connect(leFrom, &QLineEdit::textChanged, this, [this](){ RefreshView(); });
+	connect(leTo, &QLineEdit::textChanged, this, [this](){ RefreshView(); });
+	connect(widgetTable->comboShowAllOrFound, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](){ RefreshView(); });
 
 	QTimer::singleShot(0, [this](){ LoadSettings(); });
 }
@@ -102,6 +100,8 @@ void MainWidget::CreateBottomRow(QVBoxLayout * vloMain)
 	auto btnLogs = new QPushButton("Logs");
 	hlo2->addWidget(btnLogs);
 	connect(btnLogs, &QAbstractButton::clicked, this, &MainWidget::OpenLogsDir);
+
+	InitErrorsShowing(hlo2);
 
 	hlo2->addStretch();
 }
@@ -137,68 +137,71 @@ std::vector<setting> MainWidget::GetSettingsObjectsList()
 	settings.emplace_back(setting{"includeSubcats", QCheckBoxState(checkBoxIncludeSubcats)});
 	settings.emplace_back(setting{"from", QLineEditState(leFrom)});
 	settings.emplace_back(setting{"to", QLineEditState(leTo)});
-	settings.emplace_back(setting{"comboBoxState", QComboBoxState(comboFindResView)});
+	settings.emplace_back(setting{"comboFromMode", QComboBoxState(comboFromMode)});
+	settings.emplace_back(setting{"comboShowAllOrFound", QComboBoxState(widgetTable->comboShowAllOrFound)});
 	settings.emplace_back(setting{"notesContent", &notesContent});
 	return settings;
 }
 
-void MainWidget::UpdatePreparedReplaces(bool *showInfoForAdd)
+FromMode MainWidget::GetFromMode()
 {
-	if(showInfoForAdd) *showInfoForAdd = false;
+	FromMode mode = comboFromModeVals[comboFromMode->currentText()];
+	if(mode == FromMode::undefined)
+	{
+		qdbg << "MainWidget::GetFromMode undefined from mode; set other";
+		mode = FromMode::caseSensitive;
+	}
+	return mode;
+}
 
-	preparedReplacesAll.clear();
-	preparedReplacesAll.reserve(findResRowsAll.size());
+void MainWidget::InitErrorsShowing(QHBoxLayout *hlo)
+{
+	static bool inited = false;
+	if(not inited)
+	{
+		QPushButton *btn = new QPushButton();
+		hlo->addWidget(btn);
+		connect(btn, &QPushButton::clicked, this, [this](){
+			auto dumpErrors = errors;
+			errors.clear();
+			MyQDialogs::ShowText(dumpErrors);
+		});
 
+		QTimer *timer = new QTimer(this);
+		timer->start(100);
+		connect(timer, &QTimer::timeout, this, [this, btn](){
+			//static int i=0;
+			//errors += QSn(i++);
+
+			if(errors.isEmpty())
+			{
+				btn->setEnabled(false);
+				btn->setText("No errors");
+				btn->hide();
+				return;
+			}
+
+			btn->setEnabled(true);
+			btn->setText(" Show "+QSn(errors.size())+" errors ");
+			btn->show();
+		});
+	}
+}
+
+void MainWidget::RefreshView()
+{
 	auto settings = ReplaceSettingsGet();
-	for(const auto &row : findResRowsAll)
+	for(auto &rep : preparedReplacesAll)
 	{
-		ReplaceRow replace;
-		if(settings.from.isEmpty() or not settings.error.isEmpty())
-		{
-			replace.from = QFileInfo(row).filePath();
-		}
-		else
-		{
-			replace = PrepareReplaceForRow(row, settings);
-		}
-		preparedReplacesAll.emplace_back(std::move(replace));
+		ReplaceRow &replace = rep;
+		replace = PrepareReplaceForRow(replace.from, settings);
 	}
-}
-
-std::vector<int> MainWidget::GetDisplayedReplaceIndexes() const
-{
-	std::vector<int> displayedIndexes;
-	displayedIndexes.reserve(preparedReplacesAll.size());
-
-	const bool showChangedOnly = comboFindResView->currentIndex() == 0;
-	for(int i = 0; i < static_cast<int>(preparedReplacesAll.size()); ++i)
-	{
-		const auto &replace = preparedReplacesAll[i];
-		if(showChangedOnly and (not replace.error.isEmpty() or not replace.HasMatches()))
-			continue;
-		displayedIndexes.emplace_back(i);
-	}
-
-	return displayedIndexes;
-}
-
-void MainWidget::RefreshFindResView(bool *showInfoForAdd)
-{
-	UpdatePreparedReplaces(showInfoForAdd);
-	auto displayedIndexes = GetDisplayedReplaceIndexes();
-	QStringList rows;
-	rows.reserve(static_cast<int>(displayedIndexes.size()));
-	for(int index : displayedIndexes)
-	{
-		rows += preparedReplacesAll[index].from;
-	}
-
 	widgetTable->FillTable();
 }
 
 void MainWidget::SlotScan()
 {
-	findResRowsAll.clear();
+	preparedReplacesAll.clear();
 
 	auto rows = textEditDirs->toPlainText().split('\n');
 	for(auto &row : rows)
@@ -215,7 +218,6 @@ void MainWidget::SlotScan()
 	auto settings = ReplaceSettingsGet();
 	if(not settings.error.isEmpty()) { QMbError(settings.error); return; }
 
-	bool showInfoForAdd = false;
 	QStringList errors;
 	for(auto &row:rows)
 	{
@@ -227,21 +229,16 @@ void MainWidget::SlotScan()
 		while(dirIt.hasNext())
 		{
 			QString row = dirIt.next();
-			findResRowsAll += row;
+			auto &newRep = preparedReplacesAll.emplace_back();
+			newRep.from = row;
 		}
 	}
 
-	RefreshFindResView(&showInfoForAdd);
+	RefreshView();
 
 	if(not errors.isEmpty())
 	{
 		MyQDialogs::ShowText("Errors while scan:\n"+errors.join('\n'));
-	}
-
-	if(showInfoForAdd)
-	{
-		QMbInfo("Длина заменяемого текста равна нулю. "
-				"В строках выделена буква, перед котрой будет вставлен текст, сама буква заменена не будет!");
 	}
 }
 
@@ -251,10 +248,6 @@ void MainWidget::SlotReplace()
 	if(not regStgs.error.isEmpty()) { QMbError(regStgs.error); return; }
 
 	if(regStgs.from.isEmpty()) { QMbError("Empty from value"); return; }
-
-	auto displayedIndexes = GetDisplayedReplaceIndexes();
-
-	if(displayedIndexes.empty()) { QMbError("Empty find res"); return; }
 
 	std::vector<ReplaceRow*> replacesToWork;
 	for(auto &rep:preparedReplacesAll)
@@ -346,6 +339,23 @@ void MainWidget::SlotReplace()
 	}
 }
 
+ReplaceSettings MainWidget::ReplaceSettingsGet()
+{
+	ReplaceSettings settings {
+		"",
+		leFrom->text(),
+				leTo->text(),
+				GetFromMode(),
+				radioReplaceAll->isChecked(),
+				QRegularExpression(leFrom->text())
+	};
+
+	if(settings.fromMode == FromMode::regExpr and not settings.fromRegExpr.isValid())
+		settings.error = settings.fromRegExpr.errorString();
+
+	return settings;
+}
+
 QString MainWidget::BuildLogsText(const QStringList &logs, const QStringList &errors) const
 {
 	QStringList lines;
@@ -393,7 +403,7 @@ void MainWidget::OpenLogsDir()
 	}
 }
 
-ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings) const
+ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSettings & replaceSettings)
 {
 	QFileInfo fi(row);
 	ReplaceRow replace;
@@ -402,34 +412,32 @@ ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSe
 	QString path = fi.path();
 	if(not fi.isFile())
 	{
-		replace.error = "is not file";
+		errors.append("is not file");
 		return replace;
 	}
 
-	if(not replaceSettings.fromRegExprEnabled)
+	if(replaceSettings.from.isEmpty())
 	{
-		int foundIndex = fileNameNoPath.indexOf(replaceSettings.from);
-		if(foundIndex != -1)
-		{
+		replace.to = replace.from;
+		return replace;
+	}
+
+	if(replaceSettings.fromMode != FromMode::regExpr)
+	{
+		auto caseMode = replaceSettings.fromMode == FromMode::caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+		int foundIndex = fileNameNoPath.indexOf(replaceSettings.from, 0, caseMode);
+
+		while (foundIndex != -1) {
 			replace.matches.emplace_back(OneMatch(Index(
 				foundIndex,
 				path.size() + 1 + foundIndex,
 				replaceSettings.from.length()
 			)));
-		}
 
-		if(replaceSettings.replaceAllEntries and not replaceSettings.from.isEmpty())
-		{
-			foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
-			while(foundIndex != -1)
-			{
-				replace.matches.emplace_back(OneMatch(Index(
-					foundIndex,
-					path.size() + 1 + foundIndex,
-					replaceSettings.from.length()
-				)));
-				foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length());
-			}
+			if(not replaceSettings.replaceAllEntries) break;
+			// если включен replaceAllEntries выходим после первого совпадения
+
+			foundIndex = fileNameNoPath.indexOf(replaceSettings.from, foundIndex + replaceSettings.from.length(), caseMode);
 		}
 	}
 	else
@@ -455,10 +463,11 @@ ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSe
 	{
 		for(const auto &match: replace.matches)
 		{
-			if((not replaceSettings.fromRegExprEnabled and match.indexInSrc.length <= 0)
-					or (replaceSettings.fromRegExprEnabled and match.indexInSrc.length < 0))
+			bool regExprMode = replaceSettings.fromMode == FromMode::regExpr;
+			if((not regExprMode and match.indexInSrc.length <= 0)
+					or (regExprMode and match.indexInSrc.length < 0))
 			{
-				replace.error = "replace length = "+QSn(match.indexInSrc.length);
+				errors += "replace length = "+QSn(match.indexInSrc.length);
 				return replace;
 			}
 		}

@@ -16,4 +16,4 @@ struct RowsUpdater
 	RowsUpdater(QObject *parent);
 };
 
-#endif // ROWSUPDATER_H
+#endif
