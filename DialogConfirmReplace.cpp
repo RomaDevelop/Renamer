@@ -21,100 +21,99 @@
 
 namespace
 {
-struct PreviewText
-{
-	QString text;
-	std::vector<OneMatch> matches;
-};
-
-PreviewText TrimPreviewText(const QString &text, const std::vector<OneMatch> &matches, int trimStartPercent, bool useResultIndexes)
-{
-	PreviewText result;
-	int trimCount = text.size() * trimStartPercent / 100;
-	result.text = text.mid(trimCount);
-
-	for(const auto &match : matches)
+	struct PreviewText
 	{
-		const Index &index = useResultIndexes ? match.indexInResult : match.indexInSrc;
-		int matchStart = index.startIndexInNameWithPath;
-		if(index.length == 0)
+		QString text;
+		std::vector<OneMatch> matches;
+	};
+
+	PreviewText TrimPreviewText(const QString &text, const std::vector<OneMatch> &matches, int trimStartPercent, bool useResultIndexes)
+	{
+		PreviewText result;
+		int trimCount = text.size() * trimStartPercent / 100;
+		result.text = text.mid(trimCount);
+
+		for(const auto &match : matches)
 		{
-			if(matchStart < trimCount) continue;
+			const Index &index = useResultIndexes ? match.indexInResult : match.indexInSrc;
+			int matchStart = index.startIndexInNameWithPath;
+			if(index.length == 0)
+			{
+				if(matchStart < trimCount) continue;
+
+				result.matches.emplace_back(OneMatch(Index(
+														 matchStart - trimCount,
+														 matchStart - trimCount,
+														 0
+														 )));
+				continue;
+			}
+
+			int matchEnd = matchStart + index.length;
+			if(matchEnd <= trimCount) continue;
+
+			int visibleStart = std::max(matchStart, trimCount);
+			int visibleEnd = std::min(matchEnd, text.size());
+			if(visibleEnd <= visibleStart) continue;
 
 			result.matches.emplace_back(OneMatch(Index(
-				matchStart - trimCount,
-				matchStart - trimCount,
-				0
-			)));
-			continue;
+													 visibleStart - trimCount,
+													 visibleStart - trimCount,
+													 visibleEnd - visibleStart
+													 )));
 		}
 
-		int matchEnd = matchStart + index.length;
-		if(matchEnd <= trimCount) continue;
-
-		int visibleStart = std::max(matchStart, trimCount);
-		int visibleEnd = std::min(matchEnd, text.size());
-		if(visibleEnd <= visibleStart) continue;
-
-		result.matches.emplace_back(OneMatch(Index(
-			visibleStart - trimCount,
-			visibleStart - trimCount,
-			visibleEnd - visibleStart
-		)));
+		return result;
 	}
 
-	return result;
-}
-
-QString HighlightedText(const QString &text, const std::vector<OneMatch> &matches)
-{
-	auto toHtmlEscaped = [](const QString &value){ return value.toHtmlEscaped().replace('\n', "<br>"); };
-
-	QString html;
-	int currentIndex = 0;
-	for(const auto &match : matches)
+	QString HighlightedText(const QString &text, const std::vector<OneMatch> &matches)
 	{
-		const Index &index = match.indexInSrc;
-		if(index.startIndex < currentIndex) continue;
+		auto toHtmlEscaped = [](const QString &value){ return value.toHtmlEscaped().replace('\n', "<br>"); };
 
-		int safeStart = std::clamp(index.startIndex, 0, text.size());
-		int safeLength = std::clamp(index.length, 0, text.size() - safeStart);
+		QString html;
+		int currentIndex = 0;
+		for(const auto &match : matches)
+		{
+			const Index &index = match.indexInSrc;
+			if(index.startIndex < currentIndex) continue;
 
-		html += toHtmlEscaped(text.mid(currentIndex, safeStart - currentIndex));
-		html += "<span style=\"background-color:#fff59d;\">";
+			int safeStart = std::clamp(index.startIndex, 0, text.size());
+			int safeLength = std::clamp(index.length, 0, text.size() - safeStart);
 
-		if(safeLength == 0)
-			html += "&nbsp;";
-		else
-			html += toHtmlEscaped(text.mid(safeStart, safeLength));
+			html += toHtmlEscaped(text.mid(currentIndex, safeStart - currentIndex));
+			html += "<span style=\"background-color:#fff59d;\">";
 
-		html += "</span>";
-		currentIndex = safeStart + safeLength;
+			if(safeLength == 0)
+				html += "&nbsp;";
+			else
+				html += toHtmlEscaped(text.mid(safeStart, safeLength));
+
+			html += "</span>";
+			currentIndex = safeStart + safeLength;
+		}
+
+		html += toHtmlEscaped(text.mid(currentIndex));
+		return html;
 	}
 
-	html += toHtmlEscaped(text.mid(currentIndex));
-	return html;
-}
-
-QLabel *CreatePreviewLabel()
-{
-	auto label = new QLabel;
-	label->setTextFormat(Qt::RichText);
-	label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	label->setWordWrap(false);
-	label->setMargin(4);
-	return label;
-}
+	QLabel *CreatePreviewLabel()
+	{
+		auto label = new QLabel;
+		label->setTextFormat(Qt::RichText);
+		label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		label->setWordWrap(false);
+		label->setMargin(4);
+		return label;
+	}
 }
 
 DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef, QWidget *parent)
 	: QDialog(parent),
 	  replaces(replacesRef),
-	  timerPreviewUpdate(new QTimer(this))
+	  rowsUpdater(this)
 {
 	setWindowTitle("Подтверждение замены");
 	resize(1200, 700);
-	timerPreviewUpdate->setInterval(15);
 
 	auto vloMain = new QVBoxLayout(this);
 
@@ -196,6 +195,12 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef,
 		if(timerPreviewUpdate->isActive())
 			RebuildPreviewUpdateQueues();
 	});
+
+	auto f = [this](int row)
+	{
+		UpdatePreviewRow(row);
+	};
+	rowsUpdater.function = f;
 }
 
 bool DialogConfirmReplace::Confirm(std::vector<ReplaceRow> &replaces, QWidget *parent)
@@ -239,54 +244,6 @@ void DialogConfirmReplace::UpdatePreviewTexts()
 		timerPreviewUpdate->start();
 }
 
-void DialogConfirmReplace::RebuildPreviewUpdateQueues()
-{
-	rowsInViewportCached = MyQTableWidget::RowsInViewPort(table);
-	rowsPendingVisible.assign(rowsInViewportCached.begin(), rowsInViewportCached.end());
-	rowsPendingOther.clear();
-	rowsPendingOther.reserve(table->rowCount());
-
-	for(int row = 0; row < table->rowCount(); row++)
-	{
-		if(rowsInViewportCached.count(row) == 0)
-			rowsPendingOther.emplace_back(row);
-	}
-
-	rowsInViewportProcessed = rowsPendingVisible.empty();
-}
-
-void DialogConfirmReplace::ProcessPreviewUpdateChunk()
-{
-	const int rowsPerTick = 2;
-
-	for(int processed = 0; processed < rowsPerTick; processed++)
-	{
-		if(not rowsInViewportProcessed)
-		{
-			if(rowsPendingVisible.empty())
-			{
-				rowsInViewportProcessed = true;
-				continue;
-			}
-
-			UpdatePreviewRow(rowsPendingVisible.front());
-			rowsPendingVisible.erase(rowsPendingVisible.begin());
-			if(rowsPendingVisible.empty())
-				rowsInViewportProcessed = true;
-			continue;
-		}
-
-		if(rowsPendingOther.empty())
-		{
-			timerPreviewUpdate->stop();
-			return;
-		}
-
-		UpdatePreviewRow(rowsPendingOther.front());
-		rowsPendingOther.erase(rowsPendingOther.begin());
-	}
-}
-
 void DialogConfirmReplace::UpdatePreviewRow(int row)
 {
 	const auto &replace = replaces[row];
@@ -295,24 +252,6 @@ void DialogConfirmReplace::UpdatePreviewRow(int row)
 
 	currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
 	newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));
-}
-
-void DialogConfirmReplace::UpdatePreviewFont()
-{
-	QFont previewFont = table->font();
-	previewFont.setPointSize(sliderFontSize->value());
-
-	int rowHeight = std::max(26, sliderFontSize->value() * 2 + 8);
-	for(int row = 0; row < table->rowCount(); row++)
-	{
-		table->setRowHeight(row, rowHeight);
-
-		for(int col = 1; col <= 2; col++)
-		{
-			if(auto label = qobject_cast<QLabel*>(table->cellWidget(row, col)))
-				label->setFont(previewFont);
-		}
-	}
 }
 
 void DialogConfirmReplace::UpdateRunButtonState()
@@ -349,4 +288,15 @@ void DialogConfirmReplace::InvertRowsChecked()
 			item->setCheckState(item->checkState() == Qt::Checked ? Qt::Unchecked : Qt::Checked);
 	}
 	UpdateRunButtonState();
+}
+
+void DialogConfirmReplace::SetRowsUpdaterArgs()
+{
+	auto rowsInViewPort = MyQTableWidget::RowsInViewPort(table);
+
+	for(auto row:rowsInViewPort)
+		rowsUpdater.args.push(row);
+
+	for(int row=0; row<table->rowCount(); row++)
+		if(rowsInViewPort.count(row) == 0) rowsUpdater.args.push(row);
 }

@@ -5,11 +5,13 @@ CONFIG += c++17
 SOURCES += \
     DialogConfirmReplace.cpp \
     MainWidget.cpp \
+    RowsUpdater.cpp \
     main.cpp
 
 HEADERS += \
     DialogConfirmReplace.h \
-    MainWidget.h
+    MainWidget.h \
+    RowsUpdater.h
 
 INCLUDEPATH += \
     ../include

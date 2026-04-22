@@ -7,6 +7,7 @@
 #include <QDialog>
 
 #include "MainWidget.h"
+#include "RowsUpdater.h"
 
 class QLabel;
 class QPushButton;
@@ -26,10 +27,7 @@ public:
 private:
 	void FillTable();
 	void UpdatePreviewTexts();
-	void RebuildPreviewUpdateQueues();
-	void ProcessPreviewUpdateChunk();
 	void UpdatePreviewRow(int row);
-	void UpdatePreviewFont();
 	void UpdateRunButtonState();
 	void SetAllRowsChecked(Qt::CheckState state);
 	void InvertRowsChecked();
@@ -37,17 +35,14 @@ private:
 	std::vector<ReplaceRow> &replaces;
 	std::vector<QLabel*> currentValueLabels;
 	std::vector<QLabel*> newValueLabels;
-	std::set<int> rowsInViewportCached;
-	std::vector<int> rowsPendingVisible;
-	std::vector<int> rowsPendingOther;
-	bool rowsInViewportProcessed = false;
 	int trimStartPercentPending = 0;
 
 	QTableWidget *table;
 	QSlider *sliderTrimStartPercent;
-	QSlider *sliderFontSize;
 	QPushButton *btnRun;
-	QTimer *timerPreviewUpdate;
+
+	RowsUpdater rowsUpdater;
+	void SetRowsUpdaterArgs();
 };
 
 #endif // DIALOGCONFIRMREPLACE_H
