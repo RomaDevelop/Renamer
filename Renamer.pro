@@ -11,7 +11,8 @@ SOURCES += \
 HEADERS += \
     DialogConfirmReplace.h \
     MainWidget.h \
-    RowsUpdater.h
+    RowsUpdater.h \
+    Settings.h
 
 INCLUDEPATH += \
     ../include

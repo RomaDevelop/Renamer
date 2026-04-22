@@ -19,6 +19,13 @@
 #include "MyQShortings.h"
 #include "MyQTableWidget.h"
 
+#include "MainWidget.h"
+
+namespace Cols
+{
+	const int checkBox = 0;
+}
+
 namespace
 {
 	struct PreviewText
@@ -107,11 +114,12 @@ namespace
 	}
 }
 
-DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef, QWidget *parent)
-	: QDialog(parent),
+WidgetTable::WidgetTable(std::vector<ReplaceRow> &replacesRef, QWidget *parent)
+	: QWidget(parent),
 	  replaces(replacesRef),
 	  rowsUpdater(this)
 {
+	//qdbg << 1;
 	setWindowTitle("Подтверждение замены");
 	resize(1200, 700);
 
@@ -130,26 +138,18 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef,
 
 	auto btnInvertSelection = new QPushButton("Инвертировать");
 	hloTop->addWidget(btnInvertSelection);
-	connect(btnInvertSelection, &QPushButton::clicked, this, &DialogConfirmReplace::InvertRowsChecked);
+	connect(btnInvertSelection, &QPushButton::clicked, this, &WidgetTable::InvertRowsChecked);
 
 	hloTop->addSpacing(16);
 	hloTop->addWidget(new QLabel("Скрыть начало:"));
-	sliderTrimStartPercent = new QSlider(Qt::Horizontal);
-	sliderTrimStartPercent->setRange(0, 100);
-	sliderTrimStartPercent->setValue(0);
-	sliderTrimStartPercent->setFixedWidth(170);
-	hloTop->addWidget(sliderTrimStartPercent);
-	connect(sliderTrimStartPercent, &QSlider::valueChanged, this, [this](){ UpdatePreviewTexts(); });
+	sliderTrimmer = new QSlider(Qt::Horizontal);
+	sliderTrimmer->setRange(0, 100);
+	sliderTrimmer->setValue(0);
+	sliderTrimmer->setFixedWidth(170);
+	hloTop->addWidget(sliderTrimmer);
+	connect(sliderTrimmer, &QSlider::valueChanged, this, [this](){  SetRowsUpdaterArgs(); });
 
 	hloTop->addStretch();
-
-	hloTop->addWidget(new QLabel("Размер предпросмотра:"));
-	sliderFontSize = new QSlider(Qt::Horizontal);
-	sliderFontSize->setRange(8, 20);
-	sliderFontSize->setValue(font().pointSize() > 0 ? font().pointSize() : 10);
-	sliderFontSize->setFixedWidth(160);
-	hloTop->addWidget(sliderFontSize);
-	connect(sliderFontSize, &QSlider::valueChanged, this, [this](){ UpdatePreviewFont(); });
 
 	table = new QTableWidget;
 	table->setColumnCount(3);
@@ -165,52 +165,30 @@ DialogConfirmReplace::DialogConfirmReplace(std::vector<ReplaceRow> &replacesRef,
 	table->setColumnWidth(0, 54);
 	vloMain->addWidget(table);
 
-	auto hloBottom = new QHBoxLayout;
-	vloMain->addLayout(hloBottom);
-	hloBottom->addStretch();
-
-	btnRun = new QPushButton("Запустить замену");
-	btnRun->setDefault(true);
-	hloBottom->addWidget(btnRun);
-	connect(btnRun, &QPushButton::clicked, this, [this](){
-		for(int row = 0; row < table->rowCount(); row++)
-		{
-			auto item = table->item(row, 0);
-			replaces[row].enabled = item and item->checkState() == Qt::Checked;
-		}
-		accept();
-	});
-
-	auto btnCancel = new QPushButton("Отмена");
-	hloBottom->addWidget(btnCancel);
-	connect(btnCancel, &QPushButton::clicked, this, &DialogConfirmReplace::reject);
-
 	FillTable();
-	UpdatePreviewTexts();
-	UpdatePreviewFont();
-	UpdateRunButtonState();
 
-	connect(timerPreviewUpdate, &QTimer::timeout, this, &DialogConfirmReplace::ProcessPreviewUpdateChunk);
 	connect(table->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](){
-		if(timerPreviewUpdate->isActive())
-			RebuildPreviewUpdateQueues();
+		SetRowsUpdaterArgs();
+	});
+	connect(table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+		if (item->column() == Cols::checkBox) {
+			if(item->row() < 0 or item->row() >= (int)replaces.size())
+				qdbg << "QTableWidget::itemChanged invalid row "<<item->row();
+			auto &replace = replaces[item->row()];
+			replace.enabled = item->checkState() == Qt::Checked;
+		}
 	});
 
 	auto f = [this](int row)
 	{
-		UpdatePreviewRow(row);
+		SetRowTexts(row);
 	};
 	rowsUpdater.function = f;
 }
 
-bool DialogConfirmReplace::Confirm(std::vector<ReplaceRow> &replaces, QWidget *parent)
+void WidgetTable::FillTable()
 {
-	DialogConfirmReplace dialog(replaces, parent);
-	return dialog.exec() == QDialog::Accepted;
-}
-
-void DialogConfirmReplace::FillTable()
-{
+	table->setRowCount(0);
 	table->setRowCount(static_cast<int>(replaces.size()));
 	currentValueLabels.resize(replaces.size());
 	newValueLabels.resize(replaces.size());
@@ -222,7 +200,7 @@ void DialogConfirmReplace::FillTable()
 		auto itemEnabled = new QTableWidgetItem;
 		itemEnabled->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 		itemEnabled->setCheckState(replace.enabled ? Qt::Checked : Qt::Unchecked);
-		table->setItem(row, 0, itemEnabled);
+		table->setItem(row, Cols::checkBox, itemEnabled);
 
 		currentValueLabels[row] = CreatePreviewLabel();
 		newValueLabels[row] = CreatePreviewLabel();
@@ -230,45 +208,20 @@ void DialogConfirmReplace::FillTable()
 		table->setCellWidget(row, 2, newValueLabels[row]);
 	}
 
-	connect(table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item){
-		if(item and item->column() == 0)
-			UpdateRunButtonState();
-	});
+	SetRowsUpdaterArgs();
 }
 
-void DialogConfirmReplace::UpdatePreviewTexts()
-{
-	trimStartPercentPending = sliderTrimStartPercent->value();
-	RebuildPreviewUpdateQueues();
-	if(not timerPreviewUpdate->isActive())
-		timerPreviewUpdate->start();
-}
-
-void DialogConfirmReplace::UpdatePreviewRow(int row)
+void WidgetTable::SetRowTexts(int row)
 {
 	const auto &replace = replaces[row];
-	auto currentPreview = TrimPreviewText(replace.from, replace.matches, trimStartPercentPending, false);
-	auto newPreview = TrimPreviewText(replace.to, replace.matches, trimStartPercentPending, true);
+	auto currentPreview = TrimPreviewText(replace.from, replace.matches, sliderTrimmer->value(), false);
+	auto newPreview = TrimPreviewText(replace.to, replace.matches, sliderTrimmer->value(), true);
 
 	currentValueLabels[row]->setText(HighlightedText(currentPreview.text, currentPreview.matches));
 	newValueLabels[row]->setText(HighlightedText(newPreview.text, newPreview.matches));
 }
 
-void DialogConfirmReplace::UpdateRunButtonState()
-{
-	for(int row = 0; row < table->rowCount(); row++)
-	{
-		if(auto item = table->item(row, 0); item and item->checkState() == Qt::Checked)
-		{
-			btnRun->setEnabled(true);
-			return;
-		}
-	}
-
-	btnRun->setEnabled(false);
-}
-
-void DialogConfirmReplace::SetAllRowsChecked(Qt::CheckState state)
+void WidgetTable::SetAllRowsChecked(Qt::CheckState state)
 {
 	QSignalBlocker blocker(table);
 	for(int row = 0; row < table->rowCount(); row++)
@@ -276,10 +229,9 @@ void DialogConfirmReplace::SetAllRowsChecked(Qt::CheckState state)
 		if(auto item = table->item(row, 0))
 			item->setCheckState(state);
 	}
-	UpdateRunButtonState();
 }
 
-void DialogConfirmReplace::InvertRowsChecked()
+void WidgetTable::InvertRowsChecked()
 {
 	QSignalBlocker blocker(table);
 	for(int row = 0; row < table->rowCount(); row++)
@@ -287,10 +239,9 @@ void DialogConfirmReplace::InvertRowsChecked()
 		if(auto item = table->item(row, 0))
 			item->setCheckState(item->checkState() == Qt::Checked ? Qt::Unchecked : Qt::Checked);
 	}
-	UpdateRunButtonState();
 }
 
-void DialogConfirmReplace::SetRowsUpdaterArgs()
+void WidgetTable::SetRowsUpdaterArgs()
 {
 	auto rowsInViewPort = MyQTableWidget::RowsInViewPort(table);
 

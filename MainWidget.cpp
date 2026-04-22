@@ -23,10 +23,10 @@
 #include "MyQTextEdit.h"
 
 MainWidget::MainWidget(QWidget *parent)
-	: QWidget(parent)
+	: QWidget(parent),
+	  widgetTable { new WidgetTable(preparedReplacesAll, this) }
 {
 	textEditDirs->setLineWrapMode(QTextEdit::NoWrap);
-	textEditFindRes->setLineWrapMode(QTextEdit::NoWrap);
 	comboFindResView->addItem("Показывать только изменяемые строки");
 	comboFindResView->addItem("Показывать все строки");
 
@@ -60,7 +60,7 @@ MainWidget::MainWidget(QWidget *parent)
 	auto vloRight = new QVBoxLayout(w_in_r1);
 	vloRight->setContentsMargins(0,0,0,0);
 	vloRight->addWidget(comboFindResView);
-	vloRight->addWidget(textEditFindRes);
+	vloRight->addWidget(widgetTable);
 
 	CreateBottomRow(vloMain);
 
@@ -108,9 +108,8 @@ void MainWidget::CreateBottomRow(QVBoxLayout * vloMain)
 
 void MainWidget::SaveSettings()
 {
-	replaceAllEntries = radioReplaceAll->isChecked();
 	QSettings qsettings(settingsFile, QSettings::IniFormat);
-	auto settings = GetSettings();
+	auto settings = GetSettingsObjectsList();
 	for(auto &setting:settings)
 	{
 		qsettings.setValue(setting.name, setting.VarToStr());
@@ -120,32 +119,27 @@ void MainWidget::SaveSettings()
 void MainWidget::LoadSettings()
 {
 	QSettings qsettings(settingsFile, QSettings::IniFormat);
-	auto settings = GetSettings();
+	auto settings = GetSettingsObjectsList();
 	for(auto &setting:settings)
 	{
-		setting.VarFromStr(qsettings.value(setting.name).toString());
+		if(qsettings.contains(setting.name))
+			setting.VarFromStr(qsettings.value(setting.name).toString());
 	}
-	radioReplaceAll->setChecked(replaceAllEntries);
-	radioReplaceFirst->setChecked(not replaceAllEntries);
 }
 
-std::vector<setting> MainWidget::GetSettings()
+std::vector<setting> MainWidget::GetSettingsObjectsList()
 {
 	std::vector<setting> settings;
-	settings.emplace_back(setting{"notesContent", &notesContent});
-	settings.emplace_back(setting{"replaceAllEntries", &replaceAllEntries});
+	settings.emplace_back(setting{"textEditDirsContent", QTextEditState(textEditDirs)});
+	settings.emplace_back(setting{"replaceAllEntries", QRadioGroupState({radioReplaceAll, radioReplaceFirst})});
 	settings.emplace_back(setting{"geometry", QWidgetGeometry(this)});
 	settings.emplace_back(setting{"splitterState", QSplitterState(splitter)});
+	settings.emplace_back(setting{"includeSubcats", QCheckBoxState(checkBoxIncludeSubcats)});
+	settings.emplace_back(setting{"from", QLineEditState(leFrom)});
+	settings.emplace_back(setting{"to", QLineEditState(leTo)});
+	settings.emplace_back(setting{"comboBoxState", QComboBoxState(comboFindResView)});
+	settings.emplace_back(setting{"notesContent", &notesContent});
 	return settings;
-}
-
-void MainWidget::ClearFindResHighlight()
-{
-	QTextCursor cursor(textEditFindRes->document());
-	cursor.select(QTextCursor::Document);
-	QTextCharFormat format;
-	format.setBackground(Qt::transparent);
-	cursor.setCharFormat(format);
 }
 
 void MainWidget::UpdatePreparedReplaces(bool *showInfoForAdd)
@@ -188,28 +182,6 @@ std::vector<int> MainWidget::GetDisplayedReplaceIndexes() const
 	return displayedIndexes;
 }
 
-std::vector<std::pair<int, int>> MainWidget::GetHighlightRanges(const std::vector<int> &displayedIndexes, bool *showInfoForAdd) const
-{
-	if(showInfoForAdd) *showInfoForAdd = false;
-
-	std::vector<std::pair<int, int>> ranges;
-	int rowStart = 0;
-	for(int index : displayedIndexes)
-	{
-		const auto &replace = preparedReplacesAll[index];
-		for(const auto &match : replace.matches)
-		{
-			int add = match.indexInSrc.length == 0 ? 1 : 0;
-			if(showInfoForAdd and add != 0) *showInfoForAdd = true;
-			ranges.emplace_back(rowStart + match.indexInSrc.startIndexInNameWithPath,
-								rowStart + match.indexInSrc.startIndexInNameWithPath + match.indexInSrc.length + add);
-		}
-		rowStart += replace.from.size() + 1;
-	}
-
-	return ranges;
-}
-
 void MainWidget::RefreshFindResView(bool *showInfoForAdd)
 {
 	UpdatePreparedReplaces(showInfoForAdd);
@@ -221,15 +193,7 @@ void MainWidget::RefreshFindResView(bool *showInfoForAdd)
 		rows += preparedReplacesAll[index].from;
 	}
 
-	textEditFindRes->clear();
-	textEditFindRes->setCurrentCharFormat(QTextCharFormat());
-	textEditFindRes->setPlainText(rows.join('\n'));
-
-	ClearFindResHighlight();
-
-	auto ranges = GetHighlightRanges(displayedIndexes, showInfoForAdd);
-	if(not ranges.empty())
-		MyQTextEdit::ColorizeBackground(textEditFindRes, ranges, Qt::yellow);
+	widgetTable->FillTable();
 }
 
 void MainWidget::SlotScan()
@@ -288,57 +252,16 @@ void MainWidget::SlotReplace()
 
 	if(regStgs.from.isEmpty()) { QMbError("Empty from value"); return; }
 
-	QStringList errors;
-	QStringList logs;
-
 	auto displayedIndexes = GetDisplayedReplaceIndexes();
 
 	if(displayedIndexes.empty()) { QMbError("Empty find res"); return; }
 
-	std::vector<ReplaceRow> replaces;
-	replaces.reserve(displayedIndexes.size());
-	for(int index : displayedIndexes)
+	std::vector<ReplaceRow*> replacesToWork;
+	for(auto &rep:preparedReplacesAll)
 	{
-		const auto &replace = preparedReplacesAll[index];
-		if(not replace.error.isEmpty())
-		{
-			errors += replace.error + " in " + replace.from;
-			logs += "error, " + replace.error + " in " + replace.from;
-			continue;
-		}
-		if(not replace.HasMatches())
-		{
-			logs += "doesn't contains from value, will not be renamed: " + replace.from;
-			continue;
-		}
-		replaces.emplace_back(replace);
+		if(rep.HasMatches() and rep.enabled) replacesToWork.push_back(&rep);
 	}
-
-	if(not errors.isEmpty())
-	{
-		MyQDialogs::ShowText("Errors:\n"+errors.join('\n'));
-		return;
-	}
-
-	if(replaces.empty()) { QMbInfo("Nothing to replace"); return; }
-
-	if(not DialogConfirmReplace::Confirm(replaces, this)) return;
-
-	std::vector<ReplaceRow> enabledReplaces;
-	enabledReplaces.reserve(replaces.size());
-	for(auto &rep:replaces)
-	{
-		if(not rep.enabled)
-		{
-			logs += "skipped by user: " + rep.from + " -> " + rep.to;
-			continue;
-		}
-	}
-	for(auto &rep:replaces)
-		if(rep.enabled)
-			enabledReplaces.emplace_back(rep);
-
-	if(enabledReplaces.empty()) { QMbInfo("Nothing selected to replace"); return; }
+	if(replacesToWork.empty()) { QMbInfo("Nothing to replace"); return; }
 
 	QProgressDialog progressDialog("Renaming files...", QString(), 0, 100, this);
 	progressDialog.setWindowModality(Qt::ApplicationModal);
@@ -349,18 +272,22 @@ void MainWidget::SlotReplace()
 	progressDialog.setValue(0);
 	progressDialog.show();
 
+	QStringList errors;
+	QStringList logs;
+
 	QEventLoop waitLoop;
 	QStringList workerErrors;
 	QStringList workerLogs;
 
 	renameThread.stopper = false;
-	bool started = renameThread.start([this, enabledReplaces, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
+	bool started = renameThread.start([this, &replacesToWork, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
 		int done = 0;
 		int lastSentPercent = -1;
-		const int total = enabledReplaces.size();
+		const int total = replacesToWork.size();
 
-		for(auto &rep : enabledReplaces)
+		for(auto &repPtr : replacesToWork)
 		{
+			auto &rep = *repPtr;
 			auto renameError = MyQFileDir::Rename(rep.from, rep.to, true);
 			if(renameError.isEmpty())
 				workerLogs += "success, was renamed: " + rep.from + " -> " + rep.to;
@@ -555,33 +482,6 @@ ReplaceRow MainWidget::PrepareReplaceForRow(const QString & row, const ReplaceSe
 	return replace;
 }
 
-QByteArray ByteArrFromStr(const QString &str) { return QByteArray::fromBase64(str.toLatin1()); }
-QString ByteArrToStr(const QByteArray &byteArr) {  return QString::fromLatin1(byteArr.toBase64()); }
 
-void setting::VarFromStr(const QString &str)
-{
-	struct var_from_str {
-		var_from_str(const QString &str): str{str} {}
-		void operator()(QString *strPtr) { *strPtr = str; }
-		void operator()(QByteArray *byteArr) { *byteArr = ByteArrFromStr(str); }
-		void operator()(bool *boolPtr) { *boolPtr = (str == "true" or str == "1"); }
-		void operator()(QWidgetGeometry wGeo) { wGeo.widget->restoreGeometry(ByteArrFromStr(str)); }
-		void operator()(QSplitterState splState) { splState.splitter->restoreState(ByteArrFromStr(str)); }
-		QString str;
-	};
 
-	std::visit(var_from_str{str}, var);
-}
 
-QString setting::VarToStr()
-{
-	struct var_to_str {
-		QString operator()(QString *strPtr) const { return *strPtr; }
-		QString operator()(QByteArray *byteArr) { return ByteArrToStr(*byteArr); }
-		QString operator()(bool *boolPtr) { return *boolPtr ? "true" : "false"; }
-		QString operator()(QWidgetGeometry wGeo) { return ByteArrToStr(wGeo.widget->saveGeometry()); }
-		QString operator()(QSplitterState splState) { return ByteArrToStr(splState.splitter->saveState()); }
-	};
-
-	return std::visit(var_to_str{}, var);
-}

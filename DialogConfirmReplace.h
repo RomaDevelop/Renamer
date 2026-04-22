@@ -1,12 +1,10 @@
 #ifndef DIALOGCONFIRMREPLACE_H
 #define DIALOGCONFIRMREPLACE_H
 
-#include <set>
 #include <vector>
 
-#include <QDialog>
+#include <QWidget>
 
-#include "MainWidget.h"
 #include "RowsUpdater.h"
 
 class QLabel;
@@ -15,30 +13,29 @@ class QSlider;
 class QTableWidget;
 class QTimer;
 
-class DialogConfirmReplace : public QDialog
+struct ReplaceRow;
+
+class WidgetTable : public QWidget
 {
 	Q_OBJECT
 
 public:
-	explicit DialogConfirmReplace(std::vector<ReplaceRow> &replaces, QWidget *parent = nullptr);
+	explicit WidgetTable(std::vector<ReplaceRow> &replaces, QWidget *parent = nullptr);
 
-	static bool Confirm(std::vector<ReplaceRow> &replaces, QWidget *parent = nullptr);
+	void FillTable();
 
 private:
-	void FillTable();
-	void UpdatePreviewTexts();
-	void UpdatePreviewRow(int row);
-	void UpdateRunButtonState();
+	void SetRowTexts(int row);
+
 	void SetAllRowsChecked(Qt::CheckState state);
 	void InvertRowsChecked();
 
 	std::vector<ReplaceRow> &replaces;
 	std::vector<QLabel*> currentValueLabels;
 	std::vector<QLabel*> newValueLabels;
-	int trimStartPercentPending = 0;
 
 	QTableWidget *table;
-	QSlider *sliderTrimStartPercent;
+	QSlider *sliderTrimmer;
 	QPushButton *btnRun;
 
 	RowsUpdater rowsUpdater;

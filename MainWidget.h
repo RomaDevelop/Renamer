@@ -1,7 +1,6 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <variant>
 #include <vector>
 
 #include <QRegularExpression>
@@ -17,28 +16,10 @@
 #include "MyQDifferent.h"
 #include "thread_box.h"
 
-struct QWidgetGeometry
-{
-	QWidget *widget;
-	QWidgetGeometry(QWidget *widget): widget{widget} {}
-};
+#include "Settings.h"
+#include "DialogConfirmReplace.h"
 
-struct QSplitterState
-{
-	QSplitter *splitter;
-	QSplitterState(QSplitter *splitter): splitter{splitter} {}
-};
 
-using var_setting = std::variant<QString*, QByteArray*, bool*, QWidgetGeometry, QSplitterState>;
-
-struct setting
-{
-	QString name;
-	var_setting var;
-
-	void VarFromStr(const QString &str);
-	QString VarToStr();
-};
 
 struct ReplaceSettings
 {
@@ -103,8 +84,6 @@ private:
 	void UpdatePreparedReplaces(bool *showInfoForAdd = nullptr);
 	void RefreshFindResView(bool *showInfoForAdd = nullptr);
 	std::vector<int> GetDisplayedReplaceIndexes() const;
-	void ClearFindResHighlight();
-	std::vector<std::pair<int, int>> GetHighlightRanges(const std::vector<int> &displayedIndexes, bool *showInfoForAdd = nullptr) const;
 	QString BuildLogsText(const QStringList &logs, const QStringList &errors) const;
 	QString LogsDirPath() const;
 	void SaveLogs(const QStringList &logs, const QStringList &errors) const;
@@ -112,7 +91,7 @@ private:
 
 	void SaveSettings();
 	void LoadSettings();
-	std::vector<setting> GetSettings();
+	std::vector<setting> GetSettingsObjectsList();
 
 	QString settingsFile = MyQDifferent::ExePath()+"/files/settings.ini";
 	QString notesContent;
@@ -127,10 +106,9 @@ private:
 	QLineEdit *leTo = new QLineEdit;
 
 	QComboBox *comboFindResView = new QComboBox;
-	QTextEdit *textEditFindRes = new QTextEdit;
+	WidgetTable *widgetTable;
 	QStringList findResRowsAll;
 	std::vector<ReplaceRow> preparedReplacesAll;
-	bool replaceAllEntries = false;
 	thread_box renameThread {"renameThread"};
 
 	void SlotScan();
