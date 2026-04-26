@@ -21,6 +21,7 @@
 #include "MyQDialogs.h"
 #include "MyQExecute.h"
 #include "MyQTextEdit.h"
+#include "MyCppDifferent.h"
 
 MainWidget::MainWidget(QWidget *parent)
 	: QWidget(parent),
@@ -274,6 +275,15 @@ void MainWidget::SlotReplace()
 
 	renameThread.stopper = false;
 	bool started = renameThread.start([this, &replacesToWork, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
+		any_guard::functions_caller waitLoopQuitGuard(
+			{},
+			[this, &waitLoop](){
+				QMetaObject::invokeMethod(this, [&waitLoop](){
+					waitLoop.quit();
+				}, Qt::QueuedConnection);
+			}
+		);
+
 		int done = 0;
 		int lastSentPercent = -1;
 		const int total = replacesToWork.size();
@@ -301,10 +311,6 @@ void MainWidget::SlotReplace()
 				}, Qt::QueuedConnection);
 			}
 		}
-
-		QMetaObject::invokeMethod(this, [&waitLoop](){
-			waitLoop.quit();
-		}, Qt::QueuedConnection);
 	});
 
 	if(not started)
