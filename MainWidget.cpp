@@ -277,8 +277,10 @@ void MainWidget::SlotReplace()
 	bool started = renameThread.start([this, &replacesToWork, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
 		any_guard::functions_caller waitLoopQuitGuard(
 			{},
-			[this, &waitLoop](){
-				QMetaObject::invokeMethod(this, [&waitLoop](){
+			[this, &waitLoop, &progressDialog](){
+				QMetaObject::invokeMethod(this, [&waitLoop, &progressDialog](){
+					progressDialog.setValue(100);
+					progressDialog.close();
 					waitLoop.quit();
 				}, Qt::QueuedConnection);
 			}
@@ -324,8 +326,6 @@ void MainWidget::SlotReplace()
 		renameThread.finish(10);
 	}
 
-	progressDialog.setValue(100);
-
 	if(!workerErrors.isEmpty()) workerErrors.prepend("-------------------\nerrors in thread:");
 	if(!workerLogs.isEmpty())    workerLogs.prepend("-------------------\nlogs in thread:");
 	errors += workerErrors;
@@ -335,7 +335,7 @@ void MainWidget::SlotReplace()
 
 	if(not errors.isEmpty())
 	{
-		auto answ = QMessageBox::question({}, "Rename finished", "Show errors log?");
+		auto answ = QMessageBox::question({}, "Rename finished with errors", "Show log?");
 		if(answ == QMessageBox::Yes)
 		{
 			QStringList textToShow;
@@ -343,6 +343,7 @@ void MainWidget::SlotReplace()
 			MyQDialogs::ShowText(textToShow.join("\n\n"));
 		}
 	}
+	else QMbInfo("Rename finished");
 }
 
 ReplaceSettings MainWidget::ReplaceSettingsGet()
