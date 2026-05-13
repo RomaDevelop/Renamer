@@ -164,7 +164,7 @@ void MainWidget::InitErrorsShowing(QHBoxLayout *hlo)
 		connect(btn, &QPushButton::clicked, this, [this](){
 			auto dumpErrors = errors;
 			errors.clear();
-			MyQDialogs::ShowText(dumpErrors);
+			MyQDialogs::ShowText("Errors", dumpErrors);
 		});
 
 		QTimer *timer = new QTimer(this);
@@ -238,7 +238,7 @@ void MainWidget::SlotScan()
 
 	if(not errors.isEmpty())
 	{
-		MyQDialogs::ShowText("Errors while scan:\n"+errors.join('\n'));
+		MyQDialogs::ShowText("Errors", "Errors while scan:\n"+errors.join('\n'));
 	}
 }
 
@@ -334,7 +334,7 @@ void MainWidget::SlotReplace()
 		{
 			QStringList textToShow;
 			textToShow += BuildLogsText(logs, errors);
-			MyQDialogs::ShowText(textToShow.join("\n\n"));
+			MyQDialogs::ShowText("Errors", textToShow.join("\n\n"));
 		}
 	}
 }
