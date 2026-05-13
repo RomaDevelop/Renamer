@@ -21,6 +21,7 @@
 #include "MyQDialogs.h"
 #include "MyQExecute.h"
 #include "MyQTextEdit.h"
+#include "MyCppDifferent.h"
 
 MainWidget::MainWidget(QWidget *parent)
 	: QWidget(parent),
@@ -274,6 +275,17 @@ void MainWidget::SlotReplace()
 
 	renameThread.stopper = false;
 	bool started = renameThread.start([this, &replacesToWork, &workerErrors, &workerLogs, &progressDialog, &waitLoop]() mutable {
+		any_guard::functions_caller waitLoopQuitGuard(
+			{},
+			[this, &waitLoop, &progressDialog](){
+				QMetaObject::invokeMethod(this, [&waitLoop, &progressDialog](){
+					progressDialog.setValue(100);
+					progressDialog.close();
+					waitLoop.quit();
+				}, Qt::QueuedConnection);
+			}
+		);
+
 		int done = 0;
 		int lastSentPercent = -1;
 		const int total = replacesToWork.size();
@@ -301,10 +313,6 @@ void MainWidget::SlotReplace()
 				}, Qt::QueuedConnection);
 			}
 		}
-
-		QMetaObject::invokeMethod(this, [&waitLoop](){
-			waitLoop.quit();
-		}, Qt::QueuedConnection);
 	});
 
 	if(not started)
@@ -318,8 +326,6 @@ void MainWidget::SlotReplace()
 		renameThread.finish(10);
 	}
 
-	progressDialog.setValue(100);
-
 	if(!workerErrors.isEmpty()) workerErrors.prepend("-------------------\nerrors in thread:");
 	if(!workerLogs.isEmpty())    workerLogs.prepend("-------------------\nlogs in thread:");
 	errors += workerErrors;
@@ -329,7 +335,7 @@ void MainWidget::SlotReplace()
 
 	if(not errors.isEmpty())
 	{
-		auto answ = QMessageBox::question({}, "Rename finished", "Show errors log?");
+		auto answ = QMessageBox::question({}, "Rename finished with errors", "Show log?");
 		if(answ == QMessageBox::Yes)
 		{
 			QStringList textToShow;
@@ -337,6 +343,7 @@ void MainWidget::SlotReplace()
 			MyQDialogs::ShowText("Errors", textToShow.join("\n\n"));
 		}
 	}
+	else QMbInfo("Rename finished");
 }
 
 ReplaceSettings MainWidget::ReplaceSettingsGet()
